@@ -1,0 +1,32 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  Project: maki-openshell — a toolkit for running Maki (maki.sh) coding agents
+  inside NVIDIA OpenShell sandboxes, fully isolated from the host system.
+
+  Stack: Markdown documentation; POSIX sh helper script + fish shell plugin;
+  Bun + TypeScript for a local dashboard (no frontend framework, no build step).
+
+  Security invariants (apply to every artifact and task):
+  - The OpenShell sandbox is the security boundary. Never add host bind mounts.
+  - Never pass secrets via `openshell sandbox create --env`; credentials go
+    through OpenShell provider profiles (placeholder + proxy substitution).
+  - Egress stays deny-by-default; every new endpoint needs a policy/profile rule.
+  - Sandbox processes run as a non-root user; filesystem policy stays minimal.
+  - Maki runs with provider env placeholders only; never `maki auth login`
+    inside a sandbox.
+
+  Deliverables live under docs/, examples/, bin/, fish/, dashboard/.
+  This project plans with OpenSpec before implementing; the propose phase
+  produces artifacts only, implementation happens via the apply workflow.
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Cite concrete OpenShell or Maki documentation URLs when a decision depends on upstream behavior.
+    - Name new capabilities in kebab-case and scope them to observable behavior.
+  specs:
+    - Every requirement uses SHALL/MUST and has at least one testable scenario.
+  tasks:
+    - Every task names its verification method (command, test, or artifact check).

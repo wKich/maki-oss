@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-05
+goal: One reproducible, safe path from a clean machine to a running sandboxed Maki
+skip_specs: true

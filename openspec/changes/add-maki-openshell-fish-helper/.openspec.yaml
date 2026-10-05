@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-05
+goal: Encode the setup guide workflow into safe, repeatable commands with fish
+  completion
