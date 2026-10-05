@@ -1,0 +1,228 @@
+#!/bin/sh
+# Stub openshell CLI for tests/run-tests.sh.
+#
+# Records argv to $STUB_LOG (one argument per line, invocations separated by
+# "---") and simulates the subset of the CLI that maki-oss uses. Sandbox state
+# lives under $STUB_STATE_DIR/sandboxes (one file per sandbox, containing its
+# phase) and $STUB_STATE_DIR/providers (attached provider names).
+#
+# Environment knobs:
+#   STUB_LOG              file to append argv to
+#   STUB_STATE_DIR        directory holding simulated state
+#   STUB_EXEC_STDOUT      stdout for `sandbox exec` (default: stub-exec-output)
+#   STUB_EXEC_EXIT        exit code for `sandbox exec` (default: 0)
+#   STUB_GATEWAY_DOWN     "1" makes every command fail as if unreachable
+#   STUB_PROVIDER_NAMES   newline-separated names for `provider list`
+
+set -eu
+
+if [ -n "${STUB_LOG:-}" ]; then
+    {
+        printf '%s\n' '---'
+        for stub_arg in "$@"; do
+            printf '%s\n' "$stub_arg"
+        done
+    } >> "$STUB_LOG"
+fi
+
+if [ "${STUB_GATEWAY_DOWN:-0}" = 1 ]; then
+    printf 'stub: gateway unreachable\n' >&2
+    exit 1
+fi
+
+state=${STUB_STATE_DIR:-}
+sandboxes=$state/sandboxes
+providers=$state/providers
+nl='
+'
+
+if [ "${1:-}" = "-g" ] || [ "${1:-}" = "--gateway" ]; then
+    shift
+    if [ "$#" -gt 0 ]; then
+        shift
+    fi
+fi
+
+command_name=${1:-}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case $command_name in
+    sandbox)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        case $action in
+            create)
+                sandbox_name=
+                sandbox_providers=
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --name)
+                            sandbox_name=${2:-}
+                            shift
+                            ;;
+                        --provider)
+                            if [ -n "$sandbox_providers" ]; then
+                                sandbox_providers="$sandbox_providers$nl${2:-}"
+                            else
+                                sandbox_providers=${2:-}
+                            fi
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                if [ -z "$state" ]; then
+                    printf 'stub: STUB_STATE_DIR is not set\n' >&2
+                    exit 2
+                fi
+                mkdir -p "$sandboxes" "$providers"
+                if [ -e "$sandboxes/$sandbox_name" ]; then
+                    printf 'stub: sandbox %s already exists\n' "$sandbox_name" >&2
+                    exit 1
+                fi
+                printf 'Ready\n' > "$sandboxes/$sandbox_name"
+                printf '%s\n' "$sandbox_providers" > "$providers/$sandbox_name"
+                printf 'stub: created %s\n' "$sandbox_name"
+                ;;
+            list)
+                if [ -z "$state" ]; then
+                    printf 'stub: STUB_STATE_DIR is not set\n' >&2
+                    exit 2
+                fi
+                printf '{\n  "next_page_token": "",\n  "sandboxes": ['
+                stub_first=1
+                if [ -d "$sandboxes" ]; then
+                    for stub_entry in "$sandboxes"/*; do
+                        if [ ! -e "$stub_entry" ]; then
+                            continue
+                        fi
+                        stub_name=$(basename "$stub_entry")
+                        stub_phase=$(cat "$stub_entry")
+                        if [ "$stub_first" -eq 0 ]; then
+                            printf ','
+                        fi
+                        stub_first=0
+                        printf '\n    {"id": "id-%s", "name": "%s", "workspace": "default", "labels": {}, "annotations": {}, "resource_version": 1, "created_at": "2026-01-01 00:00:00", "phase": "%s", "current_policy_version": 1, "exit_code": null, "conditions": []}' \
+                            "$stub_name" "$stub_name" "$stub_phase"
+                    done
+                fi
+                printf '\n  ]\n}\n'
+                ;;
+            start)
+                sandbox_name=${1:-}
+                if [ ! -e "$sandboxes/$sandbox_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sandbox_name" >&2
+                    exit 1
+                fi
+                printf 'Ready\n' > "$sandboxes/$sandbox_name"
+                ;;
+            stop)
+                sandbox_name=${1:-}
+                if [ ! -e "$sandboxes/$sandbox_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sandbox_name" >&2
+                    exit 1
+                fi
+                printf 'Stopped\n' > "$sandboxes/$sandbox_name"
+                ;;
+            delete)
+                sandbox_name=${1:-}
+                rm -f "$sandboxes/$sandbox_name" "$providers/$sandbox_name"
+                ;;
+            exec)
+                printf '%s\n' "${STUB_EXEC_STDOUT:-stub-exec-output}"
+                exit "${STUB_EXEC_EXIT:-0}"
+                ;;
+            upload|download)
+                printf 'stub: %s ok\n' "$action"
+                ;;
+            provider)
+                provider_action=${1:-}
+                if [ "$#" -gt 0 ]; then
+                    shift
+                fi
+                case $provider_action in
+                    list)
+                        sandbox_name=${1:-}
+                        printf '{\n  "next_page_token": "",\n  "providers": ['
+                        stub_first=1
+                        if [ -n "$state" ] && [ -f "$providers/$sandbox_name" ]; then
+                            while IFS= read -r stub_provider; do
+                                if [ -z "$stub_provider" ]; then
+                                    continue
+                                fi
+                                if [ "$stub_first" -eq 0 ]; then
+                                    printf ','
+                                fi
+                                stub_first=0
+                                printf '\n    {"name": "%s", "type": "stub", "credential_keys": [], "config_keys": []}' \
+                                    "$stub_provider"
+                            done < "$providers/$sandbox_name"
+                        fi
+                        printf '\n  ]\n}\n'
+                        ;;
+                    attach)
+                        sandbox_name=${1:-}
+                        provider_name=${2:-}
+                        if [ ! -e "$sandboxes/$sandbox_name" ]; then
+                            printf 'stub: sandbox %s not found\n' "$sandbox_name" >&2
+                            exit 1
+                        fi
+                        if [ -n "$state" ]; then
+                            printf '%s\n' "$provider_name" >> "$providers/$sandbox_name"
+                        fi
+                        printf 'stub: attached %s to %s\n' "$provider_name" "$sandbox_name"
+                        ;;
+                    *)
+                        printf 'stub: unsupported sandbox provider action\n' >&2
+                        exit 1
+                        ;;
+                esac
+                ;;
+            *)
+                printf 'stub: unsupported sandbox action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    status)
+        printf '{\n  "status": "connected",\n  "gateway": "stub",\n  "version": "0.1.2-stub"\n}\n'
+        ;;
+    provider)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        case $action in
+            list)
+                provider_names=${STUB_PROVIDER_NAMES:-}
+                if [ "${1:-}" = "--names" ]; then
+                    printf '%s\n' "$provider_names" | grep -v '^$' || true
+                else
+                    printf 'NAME\n%s\n' "$provider_names"
+                fi
+                ;;
+            create) : ;;
+            *)
+                printf 'stub: unsupported provider action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    policy)
+        printf 'stub policy\n'
+        ;;
+    logs)
+        printf 'stub log line\n'
+        ;;
+    version)
+        printf 'openshell 0.1.2-stub\n'
+        ;;
+    *)
+        printf 'stub: unsupported command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,6 @@
+# Zero-dependency project; ignore anything a stray install might create.
+node_modules/
+
+# Local run artifacts
+*.log
+.DS_Store

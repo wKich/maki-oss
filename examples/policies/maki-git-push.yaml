@@ -1,0 +1,77 @@
+# OpenShell sandbox policy for Maki with repository-scoped GitHub push access.
+#
+# This is maki-minimal.yaml plus two network rules: Git Smart HTTP operations
+# for one repository, and REST API calls under the same repository.
+#
+# Before use, replace <org> and <repo> below with the repository you intend to
+# push to. Push requires credentials as well: import the OpenShell GitHub
+# profile and attach a GitHub provider, or the request fails with a
+# credential error after the network rule allows it.
+#
+#   openshell sandbox create --name maki \
+#     --from maki-agent:local \
+#     --policy examples/policies/maki-git-push.yaml \
+#     --provider maki-anthropic --provider my-github -- maki
+#
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /bin
+    - /etc
+    - /proc
+    - /dev/urandom
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: "1500"
+  run_as_group: "1500"
+
+network_policies:
+  maki_github_git:
+    name: maki-github-git
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: "/<org>/<repo>.git/info/refs*"
+          - allow:
+              method: POST
+              path: "/<org>/<repo>.git/git-upload-pack"
+          - allow:
+              method: POST
+              path: "/<org>/<repo>.git/git-receive-pack"
+    binaries:
+      - path: /usr/bin/git
+      - path: /usr/local/bin/git
+
+  maki_github_api:
+    name: maki-github-api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: "*"
+              path: "/repos/<org>/<repo>/**"
+    binaries:
+      # The API rule applies only if the image provides one of these binaries;
+      # examples/maki-image does not include gh. The git rule above works
+      # without it.
+      - path: /usr/bin/gh
+      - path: /usr/local/bin/gh

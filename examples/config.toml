@@ -1,0 +1,40 @@
+# maki-oss configuration file.
+#
+# Copy this file to ${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/config.toml
+# and adjust the values. The helper reads it as data: `key = "value"` lines,
+# `#` comments, and blank lines. It is never sourced, and an unknown key is a
+# hard error. Flags override MAKI_OSS_* environment variables, which override
+# this file, which overrides the built-in defaults.
+#
+# Supported keys (all values are quoted strings):
+
+# Container image for the sandbox. Build it with `maki-oss image build`.
+image = "maki-agent:local"
+
+# Sandbox policy YAML. A relative path is tried against the current directory
+# first, then against the helper's repository root.
+policy = "examples/policies/maki-minimal.yaml"
+
+# Provider profiles to attach at sandbox creation, comma-separated. Create
+# them first with `maki-oss provider add`. Use "maki-anthropic" (Anthropic) or
+# "maki-openrouter" (OpenRouter); see examples/providers/.
+providers = "maki-anthropic"
+
+# Optional CPU and memory limits passed to `openshell sandbox create`.
+cpu = "2"
+memory = "4Gi"
+
+# Sandbox name pattern. `{project}` is replaced with the current directory
+# name, sanitized to [A-Za-z0-9_.-]. Remove the placeholder to pin one name,
+# or override per invocation with --name.
+sandbox_name = "maki-{project}"
+
+# Container engine used by `doctor` and `image build`: docker or podman.
+engine = "docker"
+
+# In-sandbox project directory used by upload, download, maki, and run.
+workdir = "/sandbox/project"
+
+# OpenShell gateway name. Leave unset to use the default gateway; pass
+# --gateway to override for a single invocation.
+# gateway = "openshell"

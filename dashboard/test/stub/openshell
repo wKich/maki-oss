@@ -1,0 +1,431 @@
+#!/bin/sh
+# Stub openshell CLI for the dashboard test suite.
+#
+# Runs without Docker, without a gateway, and without network access. Tests
+# put this directory first on PATH (or set DASHBOARD_OPENSHELL_BIN to this
+# file) and the adapter resolves `openshell` to this script.
+#
+# Records argv to $STUB_LOG (one argument per line, invocations separated by
+# "---"), mirroring tests/stub/openshell.
+#
+# Simulated state lives under $STUB_STATE_DIR:
+#   sandboxes/<name>    phase of a sandbox (one per file)
+#   providers/<name>    attached provider names, one per line
+#   notes/<name>        optional invalid-configuration note
+#
+# Environment knobs:
+#   STUB_LOG           file to append argv to
+#   STUB_STATE_DIR     directory holding simulated state
+#   STUB_FAIL          "gateway": fail every command as unreachable (exit 1)
+#                      "invalid-json": exit 0 with non-JSON output
+#                      "timeout": hang until killed
+#                      "exit:<code>": exit with <code> and a message
+#   STUB_SANDBOX_NOTE  when set, every listed sandbox reports a rejected
+#                      configuration admission with this error text
+#   STUB_LOG_LINES     number of lines emitted by `logs --tail` (default 3)
+#   STUB_LOG_INTERVAL  seconds between emitted log lines (default 0.05)
+#   STUB_LOG_KEEPALIVE "1" (default) keeps streaming after the lines
+#   STUB_VERSION       version string reported by `version`
+
+set -eu
+
+if [ -n "${STUB_LOG:-}" ]; then
+    {
+        printf '%s\n' '---'
+        for stub_arg in "$@"; do
+            printf '%s\n' "$stub_arg"
+        done
+    } >> "$STUB_LOG"
+fi
+
+case ${STUB_FAIL:-} in
+    gateway)
+        printf 'stub: gateway unreachable\n' >&2
+        exit 1
+        ;;
+    invalid-json)
+        printf 'this is not valid json\n'
+        exit 0
+        ;;
+    timeout)
+        while :; do sleep 1; done
+        ;;
+    exit:*)
+        printf 'stub: forced failure\n' >&2
+        exit "${STUB_FAIL#exit:}"
+        ;;
+esac
+
+state=${STUB_STATE_DIR:-}
+sandboxes=$state/sandboxes
+providers=$state/providers
+notes=$state/notes
+
+# Skip leading global flags the adapter may pass before the subcommand.
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        --color)
+            shift
+            [ "$#" -gt 0 ] && shift
+            ;;
+        -g|--gateway|--gateway-endpoint|--workspace)
+            shift
+            [ "$#" -gt 0 ] && shift
+            ;;
+        --gateway-insecure)
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+command_name=${1:-}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+note_for() {
+    if [ -n "${STUB_SANDBOX_NOTE:-}" ]; then
+        printf '%s' "$STUB_SANDBOX_NOTE"
+        return
+    fi
+    if [ -n "$state" ] && [ -f "$notes/$1" ]; then
+        cat "$notes/$1"
+    fi
+}
+
+phase_for() {
+    if [ -n "$state" ] && [ -f "$sandboxes/$1" ]; then
+        cat "$sandboxes/$1"
+    else
+        printf 'Unknown'
+    fi
+}
+
+emit_sandbox_fields() {
+    stub_name=$1
+    stub_phase=$2
+    stub_note=$3
+    stub_admission=null
+    if [ -n "$stub_note" ]; then
+        stub_admission=$(printf '{"state": "rejected", "error": "%s", "policy_version": 0, "policy_hash": "", "config_revision": 0, "provider_env_revision": 0}' "$(json_escape "$stub_note")")
+    fi
+    printf '"id": "id-%s", "name": "%s", "workspace": "default", "labels": {"stub": "true"}, "annotations": {}, "resource_version": 3, "created_at": "2026-10-05 00:00:00", "phase": "%s", "current_policy_version": 4, "exit_code": null, "conditions": [], "endpoint_statuses": [], "configuration_admission": %s, "provisioning": null, "created_from_workload_template": null' \
+        "$(json_escape "$stub_name")" "$(json_escape "$stub_name")" "$(json_escape "$stub_phase")" "$stub_admission"
+}
+
+emit_policy_json() {
+    stub_view=$1
+    if [ "$stub_view" = base ]; then
+        printf '{"filesystem": {"read_only": ["/usr"]}, "network_policies": {"stub_base_rule": {"endpoints": [{"host": "base.example.com", "port": 443}]}}}'
+    else
+        printf '{"filesystem": {"read_only": ["/usr"]}, "network_policies": {"stub_base_rule": {"endpoints": [{"host": "base.example.com", "port": 443}]}, "provider:stub": {"endpoints": [{"host": "provider.example.com", "port": 443}]}}}'
+    fi
+}
+
+case $command_name in
+    --version|version)
+        printf '%s\n' "${STUB_VERSION:-openshell 0.1.2-stub}"
+        ;;
+    status)
+        printf '{\n  "authentication": {"provider": "mTLS transport", "status": "authenticated"},\n  "gateway": "stub",\n  "server": "https://localhost:17670",\n  "status": "connected",\n  "version": "0.1.2-stub"\n}\n'
+        ;;
+    sandbox)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        case $action in
+            list)
+                printf '{\n  "next_page_token": "",\n  "sandboxes": ['
+                first=1
+                if [ -n "$state" ] && [ -d "$sandboxes" ]; then
+                    for entry in "$sandboxes"/*; do
+                        [ -e "$entry" ] || continue
+                        sb_name=$(basename "$entry")
+                        sb_phase=$(cat "$entry")
+                        sb_note=$(note_for "$sb_name")
+                        if [ "$first" -eq 0 ]; then
+                            printf ','
+                        fi
+                        first=0
+                        printf '\n    {'
+                        emit_sandbox_fields "$sb_name" "$sb_phase" "$sb_note"
+                        printf '}'
+                    done
+                fi
+                printf '\n  ]\n}\n'
+                ;;
+            get)
+                sb_name=${1:-}
+                if [ -z "$state" ] || [ ! -f "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sb_name" >&2
+                    exit 1
+                fi
+                sb_note=$(note_for "$sb_name")
+                printf '{\n  '
+                emit_sandbox_fields "$sb_name" "$(phase_for "$sb_name")" "$sb_note"
+                printf ',\n  "restart_policy": "never",\n  "main_process_instance_id": "instance-1",\n  "restart_count": 0,\n  "next_restart_at_ms": 0,\n  "main_process_started_at_ms": 1759622400000,\n  "policy_source": "sandbox",\n  "revision": 4,\n  "policy": '
+                emit_policy_json full
+                printf '\n}\n'
+                ;;
+            create)
+                sb_name=
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --name)
+                            sb_name=${2:-}
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                if [ -z "$state" ]; then
+                    printf 'stub: STUB_STATE_DIR is not set\n' >&2
+                    exit 2
+                fi
+                if [ -z "$sb_name" ]; then
+                    printf 'stub: --name is required\n' >&2
+                    exit 1
+                fi
+                mkdir -p "$sandboxes" "$providers"
+                if [ -e "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s already exists\n' "$sb_name" >&2
+                    exit 1
+                fi
+                printf 'Ready\n' > "$sandboxes/$sb_name"
+                : > "$providers/$sb_name"
+                printf '{\n  '
+                emit_sandbox_fields "$sb_name" Ready ""
+                printf ',\n  "service_urls": {}\n}\n'
+                ;;
+            start)
+                sb_name=${1:-}
+                if [ -z "$state" ] || [ ! -f "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sb_name" >&2
+                    exit 1
+                fi
+                printf 'Ready\n' > "$sandboxes/$sb_name"
+                printf 'stub: started %s\n' "$sb_name"
+                ;;
+            stop)
+                sb_name=${1:-}
+                if [ -z "$state" ] || [ ! -f "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sb_name" >&2
+                    exit 1
+                fi
+                printf 'Stopped\n' > "$sandboxes/$sb_name"
+                printf 'stub: stopped %s\n' "$sb_name"
+                ;;
+            delete)
+                sb_name=${1:-}
+                if [ -z "$state" ] || [ ! -f "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sb_name" >&2
+                    exit 1
+                fi
+                rm -f "$sandboxes/$sb_name" "$providers/$sb_name" "$notes/$sb_name"
+                printf 'stub: deletion accepted for %s\n' "$sb_name"
+                ;;
+            provider)
+                provider_action=${1:-}
+                if [ "$#" -gt 0 ]; then
+                    shift
+                fi
+                case $provider_action in
+                    list)
+                        sb_name=${1:-}
+                        printf '{\n  "next_page_token": "",\n  "providers": ['
+                        first=1
+                        if [ -n "$state" ] && [ -f "$providers/$sb_name" ]; then
+                            while IFS= read -r entry; do
+                                [ -n "$entry" ] || continue
+                                if [ "$first" -eq 0 ]; then
+                                    printf ','
+                                fi
+                                first=0
+                                printf '\n    {"name": "%s", "type": "stub", "credential_keys": ["STUB_TOKEN"], "config_keys": []}' "$(json_escape "$entry")"
+                            done < "$providers/$sb_name"
+                        fi
+                        printf '\n  ]\n}\n'
+                        ;;
+                    *)
+                        printf 'stub: unsupported provider action: %s\n' "$provider_action" >&2
+                        exit 1
+                        ;;
+                esac
+                ;;
+            *)
+                printf 'stub: unsupported sandbox action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    policy)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        sb_name=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        view=full
+        for arg in "$@"; do
+            case $arg in
+                --base) view=base ;;
+                --full) view=full ;;
+            esac
+        done
+        case $action in
+            get)
+                if [ -z "$state" ] || [ ! -f "$sandboxes/$sb_name" ]; then
+                    printf 'stub: sandbox %s not found\n' "$sb_name" >&2
+                    exit 1
+                fi
+                printf '{\n  "scope": "sandbox",\n  "sandbox": "%s",\n  "version": 4,\n  "active_version": 4,\n  "hash": "hash-4",\n  "status": "effective",\n  "config_revision": 7,\n  "policy_source": "sandbox",\n  "policy": ' "$(json_escape "$sb_name")"
+                emit_policy_json "$view"
+                printf '\n}\n'
+                ;;
+            list)
+                printf '{\n  "next_page_token": "",\n  "revisions": [\n    {"scope": "sandbox", "sandbox": "%s", "version": 4, "hash": "hash-4", "status": "loaded", "created_at_ms": 1759622400000, "loaded_at_ms": 1759622401000},\n    {"scope": "sandbox", "sandbox": "%s", "version": 3, "hash": "hash-3", "status": "superseded", "created_at_ms": 1759536000000, "loaded_at_ms": 1759536001000},\n    {"scope": "sandbox", "sandbox": "%s", "version": 2, "hash": "hash-2", "status": "failed", "created_at_ms": 1759449600000, "load_error": "stub policy rejected"}\n  ]\n}\n' \
+                    "$(json_escape "$sb_name")" "$(json_escape "$sb_name")" "$(json_escape "$sb_name")"
+                ;;
+            *)
+                printf 'stub: unsupported policy action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    rule)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        sb_name=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        case $action in
+            get)
+                status_filter=all
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --status)
+                            status_filter=${2:-all}
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                printf 'Network Rules:  (version 9, 2 chunks)\n\n'
+                if [ "$status_filter" = all ] || [ "$status_filter" = approved ]; then
+                    printf '  Chunk: chunk-approved-1\n'
+                    printf '  Status: approved\n'
+                    printf '  Rule: allow_docs_read\n'
+                    printf '  Confidence: 95%%\n'
+                    printf '  Rationale: read documentation\n'
+                    printf '  Endpoints: docs.example.com:443 (rest, enforce)\n'
+                    printf '  Binaries: /usr/bin/curl\n\n'
+                fi
+                if [ "$status_filter" = all ] || [ "$status_filter" = pending ]; then
+                    printf '  Chunk: chunk-pending-1\n'
+                    printf '  Status: pending\n'
+                    printf '  Rule: allow_stub_api\n'
+                    printf '  Binary: /usr/bin/curl\n'
+                    printf '  Confidence: 87%%\n'
+                    printf '  Rationale: needs api.example.com:443\n'
+                    printf '  Security: link_local_reach\n'
+                    printf '  Prover: capability_expansion\n'
+                    printf '  Candidate: abcdef123456\n'
+                    printf '  Endpoints: api.example.com:443 (rest, enforce)\n'
+                    printf '  Binaries: /usr/bin/curl\n\n'
+                fi
+                ;;
+            approve)
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --chunk-id)
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                printf 'OK Chunk approved. Policy version: 5, hash: abcdef123456\n'
+                ;;
+            reject)
+                reason=
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --chunk-id)
+                            shift
+                            ;;
+                        --reason)
+                            reason=${2:-}
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                if [ -z "$reason" ]; then
+                    printf 'stub: --reason is required\n' >&2
+                    exit 1
+                fi
+                printf 'OK Chunk rejected.\n'
+                ;;
+            *)
+                printf 'stub: unsupported rule action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    settings)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        sb_name=${1:-}
+        case $action in
+            get)
+                printf '{\n  "sandbox": "%s",\n  "workspace": "default",\n  "config_revision": 7,\n  "policy_source": "sandbox",\n  "policy_hash": "hash-4",\n  "settings": {\n    "proposal_approval_mode": {"value": "manual", "scope": "unset"}\n  }\n}\n' "$(json_escape "$sb_name")"
+                ;;
+            *)
+                printf 'stub: unsupported settings action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    logs)
+        # Browser/SSE lifecycle checks observe the kill marker file: the
+        # server must SIGTERM this child when the last client disconnects.
+        if [ -n "$state" ]; then
+            mkdir -p "$state"
+            : > "$state/logs-running"
+            trap 'rm -f "$state/logs-running"; : > "$state/logs-killed"' TERM INT
+        fi
+        count=${STUB_LOG_LINES:-3}
+        interval=${STUB_LOG_INTERVAL:-0.05}
+        i=1
+        while [ "$i" -le "$count" ]; do
+            if [ $((i % 2)) -eq 1 ]; then
+                printf '[1759622400.00%s] [gateway] [INFO ] [stub] gateway log line %s\n' "$i" "$i"
+            else
+                printf '[1759622400.00%s] [sandbox] [WARN ] [stub] sandbox log line %s\n' "$i" "$i"
+            fi
+            i=$((i + 1))
+            sleep "$interval"
+        done
+        if [ "${STUB_LOG_KEEPALIVE:-1}" = 1 ]; then
+            while :; do sleep 1; done
+        fi
+        ;;
+    *)
+        printf 'stub: unsupported command: %s\n' "$command_name" >&2
+        exit 1
+        ;;
+esac

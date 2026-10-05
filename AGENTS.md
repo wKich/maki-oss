@@ -1,0 +1,36 @@
+# maki-openshell agent instructions
+
+This repository documents and automates running Maki coding agents inside
+NVIDIA OpenShell sandboxes. The sandbox is the security boundary; all work in
+this repository must preserve it.
+
+Start here:
+
+- `docs/ai/agent-playbook.md` — ordered, executable steps to build the image,
+  load provider profiles, create a sandbox, and run Maki.
+- `docs/ai/references.md` — curated upstream documentation (OpenShell and
+  Maki), the only index of external documentation links in this repository.
+
+Supporting docs: `docs/setup-guide.md` (full walkthrough),
+`docs/verification.md` (isolation checklist), `docs/glossary.md` (vocabulary),
+`docs/verification-log.md` (dry-run record). Canonical configuration lives in
+`examples/`; docs reference those files instead of duplicating them.
+
+## Security invariants
+
+Never violate these, even to make a command succeed:
+
+- **No host bind mounts.** Project files move in and out through
+  `openshell sandbox upload` / `download`.
+- **No secrets through `--env`.** Model and service credentials go through
+  OpenShell provider profiles (placeholder + proxy substitution); the sandbox
+  only ever sees `openshell:resolve:env:*` placeholders.
+- **Egress stays deny-by-default.** Every endpoint is an explicit policy or
+  provider-profile decision; add the narrowest rule and never use `tls: skip`,
+  `access: full`, or wildcard hosts to fix a denial.
+- **Non-root sandbox user.** Processes run as uid/gid 1500 (`sandbox`), and the
+  filesystem policy stays minimal (`/sandbox` and `/tmp` writable, system paths
+  read-only).
+- **Maki never authenticates inside the sandbox.** Do not run
+  `maki auth login`, and do not set `ANTHROPIC_BASE_URL` /
+  `OPENROUTER_BASE_URL` there: it would leave the credential unbound.

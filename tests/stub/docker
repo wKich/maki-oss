@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stub container engine (docker/podman) for tests/run-tests.sh.
+#
+# Records argv to $STUB_LOG like tests/stub/openshell and exits 0 unless
+# STUB_ENGINE_EXIT is set.
+
+set -eu
+
+if [ -n "${STUB_LOG:-}" ]; then
+    {
+        printf '%s\n' '---'
+        for stub_arg in "$@"; do
+            printf '%s\n' "$stub_arg"
+        done
+    } >> "$STUB_LOG"
+fi
+
+exit "${STUB_ENGINE_EXIT:-0}"

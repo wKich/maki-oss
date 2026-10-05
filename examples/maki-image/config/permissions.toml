@@ -1,0 +1,30 @@
+# Global permission rules for the sandbox user.
+#
+# Deny rules are checked before allow rules, survive YOLO mode, and cannot be
+# overridden by a project's .maki/permissions.toml. OpenShell policy remains
+# the hard boundary; these rules keep Maki from weakening its own credential
+# and configuration handling inside the sandbox.
+
+[bash]
+deny = [
+    "sudo *",       # no privilege escalation; the sandbox runs non-root
+    "su *",
+    "maki auth *",  # credentials come from OpenShell providers only
+    "ssh *",        # no host access; egress is deny-by-default regardless
+    "scp *",
+]
+
+[write]
+deny = [
+    "/sandbox/.config/**",  # protect the baked Maki configuration
+]
+
+[edit]
+deny = [
+    "/sandbox/.config/**",
+]
+
+[multiedit]
+deny = [
+    "/sandbox/.config/**",
+]

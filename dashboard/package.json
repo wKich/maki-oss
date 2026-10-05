@@ -1,0 +1,10 @@
+{
+  "name": "maki-openshell-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun --watch run src/main.ts",
+    "test": "bun test"
+  }
+}

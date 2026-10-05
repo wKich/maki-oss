@@ -1,0 +1,1334 @@
+#!/bin/sh
+# shellcheck shell=sh
+#
+# maki-oss: safe workflow helper for running Maki inside OpenShell sandboxes.
+#
+# The OpenShell sandbox is the security boundary. This helper:
+#   - never bind-mounts host directories (project files move with
+#     `openshell sandbox upload` / `download`);
+#   - never passes credential-like values through `--env` (provider profiles
+#     carry credentials instead);
+#   - asks for confirmation before deleting a sandbox.
+#
+# POSIX sh. See docs/helper.md for the full reference.
+
+set -eu
+
+PROGRAM=maki-oss
+
+# Exit-code convention.
+EX_USAGE=1    # bad invocation
+EX_DEP=2      # missing local dependency (openshell, engine, image, policy)
+EX_GATEWAY=3  # gateway or sandbox operation failed
+
+NL='
+'
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+say() { printf '%s\n' "$*"; }
+
+warn() { printf '%s: warning: %s\n' "$PROGRAM" "$*" >&2; }
+
+err() { printf '%s: %s\n' "$PROGRAM" "$*" >&2; }
+
+die_usage() {
+    err "$1"
+    printf "Run '%s help' for usage.\n" "$PROGRAM" >&2
+    exit "$EX_USAGE"
+}
+
+die_dep() {
+    err "$1"
+    exit "$EX_DEP"
+}
+
+die_gateway() {
+    err "$1"
+    exit "$EX_GATEWAY"
+}
+
+usage() {
+    cat <<'EOF'
+maki-oss: run Maki in an OpenShell sandbox.
+
+Usage:
+  maki-oss <command> [options] [arguments]
+
+Commands:
+  doctor                        Check prerequisites (CLI, gateway, engine,
+                                image, policy, providers)
+  image build                   Build the Maki sandbox image
+  init, up                      Create or start this project's sandbox
+  maki                          Attach an interactive Maki session
+  run "<prompt>"                Run Maki headless and print its JSON output
+  upload [PATH] [DEST]          Copy local files into the sandbox
+  download [SANDBOX_PATH] DEST  Copy files from the sandbox to the host
+  status                        Show this project's sandbox
+  list                          List sandboxes on the gateway
+  logs                          Show sandbox logs
+  start, stop                   Start or stop the sandbox
+  rm [--yes]                    Delete the sandbox (confirmation required)
+  policy show|edit|apply        Work with the sandbox policy
+  provider add|attach|list      Work with provider credentials
+  fish install|uninstall        Install or remove the fish plugin
+  help                          Show this help
+
+Common options:
+  --name NAME      Sandbox name (default: maki-<project directory>)
+  --image REF      Sandbox image (default: maki-agent:local)
+  --policy FILE    Sandbox policy YAML
+  --provider NAME  Attach a provider at creation (repeatable)
+  --cpu QTY        CPU limit (for example: 2, 500m)
+  --memory QTY     Memory limit (for example: 4Gi)
+  --engine NAME    Container engine: docker or podman
+  --gateway NAME   OpenShell gateway to use
+  --workdir PATH   In-sandbox project directory (default: /sandbox/project)
+  --env KEY=VALUE  Non-secret environment variable at creation (repeatable)
+  --allow-env KEY  Allow a credential-like key passed with --env (repeatable)
+  --yes            Skip the confirmation prompt for rm and policy set
+  --tail, --since, --source, --level, -n  Options for logs
+  --full, --base   Options for policy show
+  --type, --credential, --config, --from-existing, --runtime-credentials,
+  --global-profile  Options for provider add
+  --maki-version V Build argument for image build (default: $MAKI_VERSION)
+
+Exit codes: 0 success, 1 usage error, 2 dependency error, 3 gateway error.
+
+Configuration is resolved from flags, then MAKI_OSS_<KEY> environment
+variables, then the config file below, then built-in defaults:
+
+  ${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/config.toml
+
+See README.md and docs/helper.md for the cookbook.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Locate this script's repository root
+# ---------------------------------------------------------------------------
+
+script=$0
+case $script in
+    */*) ;;
+    *) script=$(command -v -- "$script" 2>/dev/null || printf '%s' "$script") ;;
+esac
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$script")" && pwd -P)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd -P)
+
+# ---------------------------------------------------------------------------
+# Defaults and configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_IMAGE=maki-agent:local
+DEFAULT_POLICY=$repo_root/examples/policies/maki-minimal.yaml
+DEFAULT_ENGINE=docker
+DEFAULT_WORKDIR=/sandbox/project
+DEFAULT_NAME='maki-{project}'
+
+config_home=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}
+config_file=$config_home/maki-openshell/config.toml
+
+config_image=
+config_policy=
+config_providers=
+config_cpu=
+config_memory=
+config_sandbox_name=
+config_engine=
+config_gateway=
+config_workdir=
+
+# Read the config file as data. The awk parser accepts `key = "value"`,
+# comments, and blank lines, and reports unknown keys; the file is never
+# sourced, so it cannot execute code.
+load_config() {
+    if [ ! -f "$config_file" ]; then
+        return 0
+    fi
+    config_tmp=${TMPDIR:-/tmp}/maki-oss-config.$$
+    if ! (umask 077 && awk '
+        BEGIN {
+            known["image"] = 1
+            known["policy"] = 1
+            known["providers"] = 1
+            known["cpu"] = 1
+            known["memory"] = 1
+            known["sandbox_name"] = 1
+            known["engine"] = 1
+            known["gateway"] = 1
+            known["workdir"] = 1
+            errors = 0
+        }
+        function problem(message) {
+            printf "%s:%d: %s\n", FILENAME, NR, message > "/dev/stderr"
+            errors++
+        }
+        {
+            line = $0
+            sub(/[[:space:]]+$/, "", line)
+            if (line == "" || line ~ /^[[:space:]]*#/) next
+            eq = index(line, "=")
+            if (eq == 0) { problem("expected: key = \"value\""); next }
+            key = substr(line, 1, eq - 1)
+            value = substr(line, eq + 1)
+            gsub(/^[[:space:]]+/, "", key)
+            gsub(/[[:space:]]+$/, "", key)
+            gsub(/^[[:space:]]+/, "", value)
+            if (key !~ /^[a-z][a-z0-9_]*$/) { problem("invalid key <" key ">"); next }
+            if (!(key in known)) { problem("unknown key <" key ">"); next }
+            if (value !~ /^"/) { problem("value for <" key "> must be a quoted string"); next }
+            if (value !~ /^"([^"\\]|\\.)*"/) { problem("unterminated value for <" key ">"); next }
+            match(value, /^"([^"\\]|\\.)*"/)
+            quoted = substr(value, RSTART + 1, RLENGTH - 2)
+            rest = substr(value, RLENGTH + 1)
+            gsub(/^[[:space:]]+/, "", rest)
+            if (rest != "" && rest !~ /^#/) { problem("unexpected text after value for <" key ">"); next }
+            if (quoted ~ /\t/) { problem("tab characters are not supported in values"); next }
+            gsub(/\\"/, "\"", quoted)
+            gsub(/\\\\/, "\\", quoted)
+            print key "\t" quoted
+        }
+        END { exit (errors > 0 ? 1 : 0) }
+    ' "$config_file" >"$config_tmp"); then
+        rm -f "$config_tmp"
+        err "invalid configuration in $config_file"
+        exit "$EX_USAGE"
+    fi
+    config_unknown=
+    tab=$(printf '\t')
+    while IFS="$tab" read -r key value; do
+        case $key in
+            image)        config_image=$value ;;
+            policy)       config_policy=$value ;;
+            providers)    config_providers=$value ;;
+            cpu)          config_cpu=$value ;;
+            memory)       config_memory=$value ;;
+            sandbox_name) config_sandbox_name=$value ;;
+            engine)       config_engine=$value ;;
+            gateway)      config_gateway=$value ;;
+            workdir)      config_workdir=$value ;;
+            '') ;;
+            *)
+                config_unknown=$key
+                break
+                ;;
+        esac
+    done <"$config_tmp"
+    rm -f "$config_tmp"
+    if [ -n "$config_unknown" ]; then
+        err "unknown key <$config_unknown> in $config_file"
+        exit "$EX_USAGE"
+    fi
+}
+
+# Precedence: flag > environment > config file > default.
+resolve_setting() {
+    if [ -n "$1" ]; then
+        printf '%s' "$1"
+    elif [ -n "$2" ]; then
+        printf '%s' "$2"
+    elif [ -n "$3" ]; then
+        printf '%s' "$3"
+    else
+        printf '%s' "$4"
+    fi
+}
+
+split_csv() {
+    printf '%s\n' "$1" | tr ',' '\n' \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -v '^$' || true
+}
+
+providers_value() {
+    if [ -n "$opt_providers" ]; then
+        printf '%s' "$opt_providers"
+    elif [ -n "${MAKI_OSS_PROVIDERS:-}" ]; then
+        split_csv "$MAKI_OSS_PROVIDERS"
+    elif [ -n "$config_providers" ]; then
+        split_csv "$config_providers"
+    fi
+}
+
+resolved_image() {
+    resolve_setting "$opt_image" "${MAKI_OSS_IMAGE:-}" "$config_image" "$DEFAULT_IMAGE"
+}
+
+resolved_policy() {
+    policy_value=$(resolve_setting "$opt_policy" "${MAKI_OSS_POLICY:-}" "$config_policy" "$DEFAULT_POLICY")
+    case $policy_value in
+        /*) ;;
+        *)
+            if [ ! -f "$policy_value" ] && [ -f "$repo_root/$policy_value" ]; then
+                policy_value=$repo_root/$policy_value
+            fi
+            ;;
+    esac
+    printf '%s' "$policy_value"
+}
+
+resolved_engine() {
+    resolve_setting "$opt_engine" "${MAKI_OSS_ENGINE:-}" "$config_engine" "$DEFAULT_ENGINE"
+}
+
+resolved_workdir() {
+    resolve_setting "$opt_workdir" "${MAKI_OSS_WORKDIR:-}" "$config_workdir" "$DEFAULT_WORKDIR"
+}
+
+resolved_gateway() {
+    resolve_setting "$opt_gateway" "${MAKI_OSS_GATEWAY:-}" "$config_gateway" ""
+}
+
+project_basename=$(basename -- "$PWD")
+project_name=$(printf '%s' "$project_basename" | tr -c 'A-Za-z0-9_.-' '-')
+project_name=$(printf '%s' "$project_name" | sed 's/--*/-/g; s/^-//; s/-$//')
+if [ -z "$project_name" ]; then
+    project_name=project
+fi
+
+resolved_name() {
+    resolved_name_value=$(resolve_setting \
+        "$opt_name" "${MAKI_OSS_SANDBOX_NAME:-}" "$config_sandbox_name" "$DEFAULT_NAME")
+    case $resolved_name_value in
+        *'{project}'*)
+            resolved_name_value=$(printf '%s' "$resolved_name_value" \
+                | sed "s/{project}/$project_name/g")
+            ;;
+    esac
+    if [ -z "$resolved_name_value" ]; then
+        die_usage "resolved sandbox name is empty; check sandbox_name/--name"
+    fi
+    printf '%s' "$resolved_name_value"
+}
+
+# ---------------------------------------------------------------------------
+# OpenShell wrappers
+# ---------------------------------------------------------------------------
+
+have_jq=0
+if command -v jq >/dev/null 2>&1; then
+    have_jq=1
+fi
+
+os() {
+    if [ -n "$gateway" ]; then
+        openshell -g "$gateway" "$@"
+    else
+        openshell "$@"
+    fi
+}
+
+require_openshell() {
+    if ! command -v openshell >/dev/null 2>&1; then
+        die_dep "openshell CLI not found on PATH; install it from https://github.com/NVIDIA/OpenShell"
+    fi
+}
+
+run_gateway() {
+    run_gateway_rc=0
+    os "$@" || run_gateway_rc=$?
+    if [ "$run_gateway_rc" -ne 0 ]; then
+        err "openshell command failed (exit status $run_gateway_rc)"
+        exit "$EX_GATEWAY"
+    fi
+}
+
+sandbox_phase() {
+    sandbox_json=''
+    if ! sandbox_json=$(os sandbox list --output json); then
+        die_gateway "cannot list sandboxes; is the gateway running? Try '$PROGRAM doctor'"
+    fi
+    if [ "$have_jq" -eq 1 ]; then
+        printf '%s' "$sandbox_json" \
+            | jq -r --arg n "$1" '[.sandboxes[]? | select(.name == $n) | .phase][0] // empty'
+    else
+        printf '%s' "$sandbox_json" | awk -v target="$1" '
+            {
+                if (index($0, "\"name\": \"" target "\"") > 0) found = 1
+                if (found && index($0, "\"phase\":") > 0) {
+                    line = $0
+                    sub(/.*"phase":[ ]*"/, "", line)
+                    sub(/".*/, "", line)
+                    print line
+                    exit
+                }
+            }
+        '
+    fi
+}
+
+require_sandbox() {
+    require_sandbox_phase=$(sandbox_phase "$1")
+    if [ -z "$require_sandbox_phase" ]; then
+        err "sandbox '$1' not found; run '$PROGRAM up' first"
+        exit "$EX_USAGE"
+    fi
+}
+
+attached_providers() {
+    attached_json=''
+    if ! attached_json=$(os sandbox provider list "$1" --output json); then
+        die_gateway "cannot list providers attached to '$1'"
+    fi
+    if [ "$have_jq" -eq 1 ]; then
+        printf '%s' "$attached_json" | jq -r '.providers[]?.name'
+    else
+        printf '%s' "$attached_json" \
+            | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Safety checks
+# ---------------------------------------------------------------------------
+
+# Mirrors OpenShell's own heuristic: a credential-like key contains one of
+# these underscore-separated segments (API_KEY and friends span two segments).
+credential_like() {
+    credential_upper=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    credential_hay="_${credential_upper}_"
+    for credential_kw in TOKEN SECRET PASSWORD CREDENTIAL ACCESS_KEY SECRET_KEY API_KEY; do
+        case $credential_hay in
+            *"_${credential_kw}_"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+env_key_allowed() {
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    allowed=1
+    # shellcheck disable=SC2086
+    for env_allowed in $opt_allow_env; do
+        if [ "$env_allowed" = "$1" ]; then
+            allowed=0
+            break
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+    return "$allowed"
+}
+
+env_refusal() {
+    err "refusing --env $1: the name looks like a credential"
+    err "  Sandbox environment variables are readable by the agent; use a provider instead:"
+    err "    $PROGRAM provider add my-provider --type <profile> --from-existing"
+    err "    $PROGRAM provider attach my-provider"
+    err "  If this value is genuinely not secret, repeat the key with --allow-env $1"
+    exit "$EX_USAGE"
+}
+
+check_env_hygiene() {
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for env_pair in $opt_envs; do
+        if [ -z "$env_pair" ]; then
+            continue
+        fi
+        case $env_pair in
+            *=*) ;;
+            *)
+                set +f
+                IFS=$saved_ifs
+                die_usage "--env expects KEY=VALUE, got '$env_pair'"
+                ;;
+        esac
+        env_key=${env_pair%%=*}
+        case $env_key in
+            [A-Za-z_][A-Za-z0-9_]*) ;;
+            *)
+                set +f
+                IFS=$saved_ifs
+                die_usage "--env key must match [A-Za-z_][A-Za-z0-9_]*; got '$env_key'"
+                ;;
+        esac
+        if credential_like "$env_key" && ! env_key_allowed "$env_key"; then
+            set +f
+            IFS=$saved_ifs
+            env_refusal "$env_key"
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_doctor() {
+    [ "$#" -eq 0 ] || die_usage "doctor takes no arguments"
+
+    if [ "$have_jq" -eq 0 ]; then
+        warn "jq not found; falling back to grep-based parsing"
+    fi
+
+    doctor_status=0
+    have_openshell=0
+    engine_ok=0
+
+    if command -v openshell >/dev/null 2>&1; then
+        say "ok    openshell CLI: $(command -v openshell)"
+        have_openshell=1
+    else
+        say "fail  openshell CLI: not found on PATH"
+        doctor_status=$EX_DEP
+    fi
+
+    if [ "$have_openshell" -eq 1 ]; then
+        gateway_json=''
+        if gateway_json=$(os status --output json); then
+            connected=''
+            if [ "$have_jq" -eq 1 ]; then
+                connected=$(printf '%s' "$gateway_json" | jq -r '.status // empty')
+            else
+                connected=$(printf '%s' "$gateway_json" \
+                    | sed -n 's/.*"status":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            fi
+            if [ "$connected" = connected ]; then
+                say "ok    gateway: connected"
+            else
+                say "fail  gateway: not connected (status: ${connected:-unknown})"
+                if [ "$doctor_status" -eq 0 ]; then
+                    doctor_status=$EX_GATEWAY
+                fi
+            fi
+        else
+            say "fail  gateway: unreachable (openshell status failed)"
+            if [ "$doctor_status" -eq 0 ]; then
+                doctor_status=$EX_GATEWAY
+            fi
+        fi
+    else
+        say "skip  gateway: openshell CLI unavailable"
+    fi
+
+    doctor_engine=$(resolved_engine)
+    if command -v "$doctor_engine" >/dev/null 2>&1; then
+        if "$doctor_engine" version >/dev/null 2>&1; then
+            say "ok    container engine: $doctor_engine ($(command -v "$doctor_engine"))"
+            engine_ok=1
+        else
+            say "fail  container engine: $doctor_engine is installed but not running"
+            doctor_status=$EX_DEP
+        fi
+    else
+        say "fail  container engine: $doctor_engine not found on PATH"
+        doctor_status=$EX_DEP
+    fi
+
+    doctor_image=$(resolved_image)
+    if [ "$engine_ok" -eq 1 ] && "$doctor_engine" image inspect "$doctor_image" >/dev/null 2>&1; then
+        say "ok    image: $doctor_image present"
+    else
+        say "fail  image: $doctor_image not found (build it: $PROGRAM image build)"
+        doctor_status=$EX_DEP
+    fi
+
+    doctor_policy=$(resolved_policy)
+    if [ -f "$doctor_policy" ]; then
+        say "ok    policy file: $doctor_policy"
+    else
+        say "fail  policy file: $doctor_policy not found"
+        doctor_status=$EX_DEP
+    fi
+
+    doctor_providers=$(providers_value)
+    if [ "$have_openshell" -eq 0 ]; then
+        say "skip  providers: openshell CLI unavailable"
+    elif [ -z "$doctor_providers" ]; then
+        say "ok    providers: none configured"
+    else
+        doctor_known=''
+        if ! doctor_known=$(os provider list --names 2>/dev/null); then
+            doctor_known=''
+        fi
+        doctor_missing=''
+        saved_ifs=$IFS
+        IFS=$NL
+        set -f
+        # shellcheck disable=SC2086
+        for doctor_provider in $doctor_providers; do
+            if [ -z "$doctor_provider" ]; then
+                continue
+            fi
+            if ! printf '%s\n' "$doctor_known" | grep -Fqx -- "$doctor_provider"; then
+                doctor_missing="$doctor_missing $doctor_provider"
+            fi
+        done
+        set +f
+        IFS=$saved_ifs
+        if [ -n "$doctor_missing" ]; then
+            say "fail  providers: not found:$doctor_missing"
+            if [ "$doctor_status" -eq 0 ]; then
+                doctor_status=$EX_GATEWAY
+            fi
+        else
+            say "ok    providers: $(printf '%s' "$doctor_providers" | tr '\n' ' ')"
+        fi
+    fi
+
+    exit "$doctor_status"
+}
+
+cmd_up() {
+    [ "$#" -eq 0 ] || die_usage "up takes no arguments"
+    require_openshell
+    image=$(resolved_image)
+    policy=$(resolved_policy)
+    if [ ! -f "$policy" ]; then
+        die_dep "policy file not found: $policy (pass --policy or fix the config)"
+    fi
+    check_env_hygiene
+    name=$(resolved_name)
+    phase=$(sandbox_phase "$name")
+    if [ -n "$phase" ]; then
+        case $phase in
+            Ready|Starting|Provisioning)
+                say "Sandbox '$name' already exists (phase: $phase)."
+                ;;
+            *)
+                say "Starting sandbox '$name' (phase: $phase)..."
+                run_gateway sandbox start "$name"
+                ;;
+        esac
+    else
+        providers=$(providers_value)
+        cpu=$(resolve_setting "$opt_cpu" "${MAKI_OSS_CPU:-}" "$config_cpu" "")
+        memory=$(resolve_setting "$opt_memory" "${MAKI_OSS_MEMORY:-}" "$config_memory" "")
+        say "Creating sandbox '$name' from $image..."
+        set -- sandbox create --name "$name" --from "$image" --policy "$policy" --detach
+        if [ -n "$cpu" ]; then
+            set -- "$@" --cpu "$cpu"
+        fi
+        if [ -n "$memory" ]; then
+            set -- "$@" --memory "$memory"
+        fi
+        if [ -n "$providers" ]; then
+            saved_ifs=$IFS
+            IFS=$NL
+            set -f
+            # shellcheck disable=SC2086
+            for provider in $providers; do
+                if [ -n "$provider" ]; then
+                    set -- "$@" --provider "$provider"
+                fi
+            done
+            set +f
+            IFS=$saved_ifs
+        fi
+        saved_ifs=$IFS
+        IFS=$NL
+        set -f
+        # shellcheck disable=SC2086
+        for env_pair in $opt_envs; do
+            if [ -n "$env_pair" ]; then
+                set -- "$@" --env "$env_pair"
+            fi
+        done
+        set +f
+        IFS=$saved_ifs
+        run_gateway "$@"
+    fi
+    say "Sandbox '$name' is ready. Next: $PROGRAM upload ."
+}
+
+cmd_maki() {
+    [ "$#" -eq 0 ] || die_usage "maki takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    workdir=$(resolved_workdir)
+    maki_rc=0
+    os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki || maki_rc=$?
+    exit "$maki_rc"
+}
+
+cmd_run() {
+    [ "$#" -ge 1 ] || die_usage "usage: maki-oss run \"<prompt>\""
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    workdir=$(resolved_workdir)
+    prompt=$*
+    run_rc=0
+    os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
+        maki --print --yolo --trust --output-format json "$prompt" || run_rc=$?
+    exit "$run_rc"
+}
+
+cmd_upload() {
+    [ "$#" -le 2 ] || die_usage "usage: maki-oss upload [LOCAL_PATH] [SANDBOX_DEST]"
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    src=${1:-.}
+    dest=${2:-$(resolved_workdir)}
+    set -- sandbox upload
+    if [ "$opt_no_git_ignore" -eq 1 ]; then
+        set -- "$@" --no-git-ignore
+    fi
+    set -- "$@" "$name" "$src" "$dest"
+    run_gateway "$@"
+    say "Uploaded '$src' to '$name:$dest'."
+}
+
+cmd_download() {
+    if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+        die_usage "usage: maki-oss download [SANDBOX_PATH] DEST"
+    fi
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    if [ "$#" -eq 1 ]; then
+        spath=$(resolved_workdir)
+        dest=$1
+    else
+        spath=$1
+        dest=$2
+    fi
+    run_gateway sandbox download "$name" "$spath" "$dest"
+    say "Downloaded '$name:$spath' to '$dest'."
+}
+
+cmd_status() {
+    [ "$#" -eq 0 ] || die_usage "status takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    phase=$(sandbox_phase "$name")
+    if [ -z "$phase" ]; then
+        say "Sandbox:   $name"
+        say "Exists:    no"
+        exit "$EX_USAGE"
+    fi
+    image=$(resolved_image)
+    providers=$(attached_providers "$name")
+    providers=$(printf '%s' "$providers" | paste -sd',' -)
+    say "Sandbox:   $name"
+    say "Exists:    yes"
+    say "Phase:     $phase"
+    say "Image:     $image (configured)"
+    say "Providers: ${providers:-none}"
+}
+
+cmd_list() {
+    [ "$#" -eq 0 ] || die_usage "list takes no arguments"
+    require_openshell
+    run_gateway sandbox list
+}
+
+cmd_logs() {
+    [ "$#" -eq 0 ] || die_usage "logs takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    set -- logs "$name"
+    if [ "$opt_tail" -eq 1 ]; then
+        set -- "$@" --tail
+    fi
+    if [ -n "$opt_since" ]; then
+        set -- "$@" --since "$opt_since"
+    fi
+    if [ -n "$opt_source" ]; then
+        set -- "$@" --source "$opt_source"
+    fi
+    if [ -n "$opt_level" ]; then
+        set -- "$@" --level "$opt_level"
+    fi
+    if [ -n "$opt_lines" ]; then
+        set -- "$@" -n "$opt_lines"
+    fi
+    run_gateway "$@"
+}
+
+cmd_start() {
+    [ "$#" -eq 0 ] || die_usage "start takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    run_gateway sandbox start "$name"
+    say "Sandbox '$name' started."
+}
+
+cmd_stop() {
+    [ "$#" -eq 0 ] || die_usage "stop takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    run_gateway sandbox stop "$name"
+    say "Sandbox '$name' stopped."
+}
+
+cmd_rm() {
+    [ "$#" -eq 0 ] || die_usage "rm takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    phase=$(sandbox_phase "$name")
+    if [ -z "$phase" ]; then
+        err "sandbox '$name' not found"
+        exit "$EX_USAGE"
+    fi
+    if [ "$opt_yes" -eq 0 ]; then
+        if [ -t 0 ]; then
+            printf "Delete sandbox '%s'? [y/N] " "$name"
+            read -r answer || answer=
+            case $answer in
+                y|Y|yes|YES) ;;
+                *)
+                    say "Aborted."
+                    exit "$EX_USAGE"
+                    ;;
+            esac
+        else
+            err "refusing to delete sandbox '$name': stdin is not a terminal; pass --yes"
+            exit "$EX_USAGE"
+        fi
+    fi
+    say "Deleting sandbox '$name'..."
+    run_gateway sandbox delete "$name"
+}
+
+cmd_policy_show() {
+    [ "$#" -eq 0 ] || die_usage "policy show takes no arguments"
+    require_openshell
+    if [ "$opt_full" -eq 1 ] && [ "$opt_base" -eq 1 ]; then
+        die_usage "policy show: --full and --base are mutually exclusive"
+    fi
+    if [ "$opt_full" -eq 1 ]; then
+        set -- policy get --full
+    elif [ "$opt_base" -eq 1 ]; then
+        set -- policy get --base
+    else
+        set -- policy get --base
+    fi
+    if [ "$opt_global" -eq 1 ]; then
+        set -- "$@" --global
+    else
+        name=$(resolved_name)
+        require_sandbox "$name"
+        set -- "$@" "$name"
+    fi
+    run_gateway "$@"
+}
+
+cmd_policy_edit() {
+    [ "$#" -eq 0 ] || die_usage "policy edit takes no arguments"
+    policy=$(resolved_policy)
+    if [ ! -f "$policy" ]; then
+        die_dep "policy file not found: $policy"
+    fi
+    editor=${EDITOR:-vi}
+    # $editor may carry arguments (for example "code -w"), so word splitting is
+    # intentional here.
+    # shellcheck disable=SC2086
+    $editor "$policy"
+}
+
+cmd_policy_apply() {
+    [ "$#" -eq 0 ] || die_usage "policy apply takes no arguments"
+    require_openshell
+    policy=$(resolved_policy)
+    if [ ! -f "$policy" ]; then
+        die_dep "policy file not found: $policy"
+    fi
+    set -- policy set --policy "$policy"
+    if [ "$opt_global" -eq 1 ]; then
+        set -- "$@" --global
+        if [ "$opt_yes" -eq 1 ]; then
+            set -- "$@" --yes
+        fi
+    else
+        name=$(resolved_name)
+        require_sandbox "$name"
+        if [ "$opt_wait" -eq 1 ]; then
+            set -- "$@" --wait
+        fi
+        set -- "$@" "$name"
+    fi
+    run_gateway "$@"
+    say "Policy applied from '$policy'."
+}
+
+cmd_provider_add() {
+    [ "$#" -eq 1 ] || die_usage "usage: maki-oss provider add NAME --type TYPE [--from-existing]"
+    provider=$1
+    if [ -z "$opt_type" ]; then
+        die_usage "provider add requires --type (a provider profile id)"
+    fi
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for credential in $opt_credentials; do
+        case $credential in
+            *=*)
+                set +f
+                IFS=$saved_ifs
+                die_usage "--credential takes the KEY name only; inline KEY=VALUE is not accepted (use --from-existing)"
+                ;;
+        esac
+    done
+    set +f
+    IFS=$saved_ifs
+    set -- provider create --name "$provider" --type "$opt_type"
+    if [ "$opt_from_existing" -eq 1 ]; then
+        set -- "$@" --from-existing
+    fi
+    if [ "$opt_runtime_credentials" -eq 1 ]; then
+        set -- "$@" --runtime-credentials
+    fi
+    if [ "$opt_global_profile" -eq 1 ]; then
+        set -- "$@" --global-profile
+    fi
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for credential in $opt_credentials; do
+        if [ -n "$credential" ]; then
+            set -- "$@" --credential "$credential"
+        fi
+    done
+    # shellcheck disable=SC2086
+    for config_pair in $opt_configs; do
+        if [ -n "$config_pair" ]; then
+            set -- "$@" --config "$config_pair"
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+    run_gateway "$@"
+    say "Provider '$provider' created."
+}
+
+cmd_provider_attach() {
+    [ "$#" -eq 1 ] || die_usage "usage: maki-oss provider attach PROVIDER [--wait]"
+    provider=$1
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    set -- sandbox provider attach "$name" "$provider"
+    if [ "$opt_wait" -eq 1 ]; then
+        set -- "$@" --wait
+    fi
+    run_gateway "$@"
+    say "Provider '$provider' attached to '$name'."
+}
+
+cmd_provider_list() {
+    [ "$#" -eq 0 ] || die_usage "provider list takes no arguments"
+    require_openshell
+    run_gateway provider list
+}
+
+cmd_image_build() {
+    [ "$#" -eq 0 ] || die_usage "image build takes no arguments"
+    context=$repo_root/examples/maki-image
+    if [ ! -d "$context" ]; then
+        die_dep "missing $context; keep the repository layout or build your image elsewhere"
+    fi
+    engine=$(resolved_engine)
+    if ! command -v "$engine" >/dev/null 2>&1; then
+        die_dep "container engine '$engine' not found on PATH"
+    fi
+    image=$(resolved_image)
+    version=$opt_maki_version
+    if [ -z "$version" ]; then
+        version=${MAKI_VERSION:-}
+    fi
+    set -- build
+    if [ -n "$version" ]; then
+        set -- "$@" --build-arg "MAKI_VERSION=$version"
+    fi
+    set -- "$@" -t "$image" "$context"
+    say "Building image '$image' with $engine..."
+    image_build_rc=0
+    "$engine" "$@" || image_build_rc=$?
+    if [ "$image_build_rc" -ne 0 ]; then
+        die_dep "image build failed (exit status $image_build_rc)"
+    fi
+    say "Built image '$image'."
+}
+
+cmd_fish_install() {
+    [ "$#" -eq 0 ] || die_usage "fish install takes no arguments"
+    fish_home=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}/fish
+    failed=0
+    for entry in functions/maki-oss.fish completions/maki-oss.fish; do
+        src=$repo_root/fish/$entry
+        dest=$fish_home/$entry
+        if [ ! -e "$src" ]; then
+            err "missing plugin file: $src"
+            failed=1
+            continue
+        fi
+        if [ -L "$dest" ]; then
+            target=$(readlink "$dest")
+            if [ "$target" = "$src" ]; then
+                say "already installed: $dest"
+            else
+                case $target in
+                    "$repo_root"/*)
+                        ln -sfn "$src" "$dest"
+                        say "relinked: $dest"
+                        ;;
+                    *)
+                        err "skipped $dest: existing symlink points outside this repository"
+                        failed=1
+                        ;;
+                esac
+            fi
+        elif [ -e "$dest" ]; then
+            err "skipped $dest: file exists and was not installed by $PROGRAM"
+            failed=1
+        else
+            mkdir -p -- "$(dirname -- "$dest")"
+            ln -s "$src" "$dest"
+            say "linked: $dest -> $src"
+        fi
+    done
+    if [ "$failed" -ne 0 ]; then
+        exit "$EX_USAGE"
+    fi
+    say "Fish plugin installed; open a new fish session to use it."
+}
+
+cmd_fish_uninstall() {
+    [ "$#" -eq 0 ] || die_usage "fish uninstall takes no arguments"
+    fish_home=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}/fish
+    for entry in functions/maki-oss.fish completions/maki-oss.fish; do
+        dest=$fish_home/$entry
+        if [ -L "$dest" ]; then
+            target=$(readlink "$dest")
+            case $target in
+                "$repo_root"/*)
+                    rm -f "$dest"
+                    say "removed: $dest"
+                    ;;
+                *)
+                    say "skipped (not installed by $PROGRAM): $dest"
+                    ;;
+            esac
+        elif [ -e "$dest" ]; then
+            say "skipped (not a symlink from this repository): $dest"
+        else
+            say "not installed: $dest"
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+#
+# Options may appear before or after the command and its arguments. After
+# parsing, the positional parameters hold the command followed by its
+# arguments. `--` ends option parsing; use it for values that start with `-`.
+# ---------------------------------------------------------------------------
+
+opt_name=
+opt_image=
+opt_policy=
+opt_cpu=
+opt_memory=
+opt_engine=
+opt_gateway=
+opt_workdir=
+opt_providers=
+opt_envs=
+opt_allow_env=
+opt_credentials=
+opt_configs=
+opt_yes=0
+opt_full=0
+opt_base=0
+opt_global=0
+opt_wait=0
+opt_tail=0
+opt_since=
+opt_source=
+opt_level=
+opt_lines=
+opt_type=
+opt_from_existing=0
+opt_runtime_credentials=0
+opt_global_profile=0
+opt_maki_version=
+opt_no_git_ignore=0
+opt_help=0
+
+append_list() {
+    # $1 is the current list name's value, $2 the new item; prints the merge.
+    if [ -n "$1" ]; then
+        printf '%s\n%s' "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+OPT_ARGC=$#
+OPT_I=0
+while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
+    OPT=$1
+    shift
+    OPT_I=$((OPT_I + 1))
+    case $OPT in
+        --name)
+            [ "$#" -gt 0 ] || die_usage "option --name requires a value"
+            opt_name=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --image)
+            [ "$#" -gt 0 ] || die_usage "option --image requires a value"
+            opt_image=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --policy)
+            [ "$#" -gt 0 ] || die_usage "option --policy requires a value"
+            opt_policy=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --cpu)
+            [ "$#" -gt 0 ] || die_usage "option --cpu requires a value"
+            opt_cpu=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --memory)
+            [ "$#" -gt 0 ] || die_usage "option --memory requires a value"
+            opt_memory=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --engine)
+            [ "$#" -gt 0 ] || die_usage "option --engine requires a value"
+            opt_engine=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --gateway)
+            [ "$#" -gt 0 ] || die_usage "option --gateway requires a value"
+            opt_gateway=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --workdir)
+            [ "$#" -gt 0 ] || die_usage "option --workdir requires a value"
+            opt_workdir=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --provider)
+            [ "$#" -gt 0 ] || die_usage "option --provider requires a value"
+            opt_providers=$(append_list "$opt_providers" "$1")
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --env)
+            [ "$#" -gt 0 ] || die_usage "option --env requires a value"
+            opt_envs=$(append_list "$opt_envs" "$1")
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --allow-env)
+            [ "$#" -gt 0 ] || die_usage "option --allow-env requires a value"
+            opt_allow_env=$(append_list "$opt_allow_env" "$1")
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --credential)
+            [ "$#" -gt 0 ] || die_usage "option --credential requires a value"
+            opt_credentials=$(append_list "$opt_credentials" "$1")
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --config)
+            [ "$#" -gt 0 ] || die_usage "option --config requires a value"
+            opt_configs=$(append_list "$opt_configs" "$1")
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --type)
+            [ "$#" -gt 0 ] || die_usage "option --type requires a value"
+            opt_type=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --since)
+            [ "$#" -gt 0 ] || die_usage "option --since requires a value"
+            opt_since=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --source)
+            [ "$#" -gt 0 ] || die_usage "option --source requires a value"
+            opt_source=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --level)
+            [ "$#" -gt 0 ] || die_usage "option --level requires a value"
+            opt_level=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        -n|--lines)
+            [ "$#" -gt 0 ] || die_usage "option $OPT requires a value"
+            opt_lines=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --maki-version)
+            [ "$#" -gt 0 ] || die_usage "option --maki-version requires a value"
+            opt_maki_version=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --yes) opt_yes=1 ;;
+        --full) opt_full=1 ;;
+        --base) opt_base=1 ;;
+        --global) opt_global=1 ;;
+        --wait) opt_wait=1 ;;
+        --tail) opt_tail=1 ;;
+        --from-existing) opt_from_existing=1 ;;
+        --runtime-credentials) opt_runtime_credentials=1 ;;
+        --global-profile) opt_global_profile=1 ;;
+        --no-git-ignore) opt_no_git_ignore=1 ;;
+        -h|--help) opt_help=1 ;;
+        --)
+            unprocessed=$((OPT_ARGC - OPT_I))
+            moved=0
+            while [ "$moved" -lt "$unprocessed" ]; do
+                set -- "$@" "$1"
+                shift
+                moved=$((moved + 1))
+            done
+            OPT_I=$OPT_ARGC
+            ;;
+        -*)
+            die_usage "unknown option: $OPT"
+            ;;
+        *)
+            set -- "$@" "$OPT"
+            ;;
+    esac
+done
+
+if [ "$opt_help" -eq 1 ]; then
+    usage
+    exit 0
+fi
+
+if [ "$#" -eq 0 ]; then
+    usage >&2
+    exit "$EX_USAGE"
+fi
+
+cmd=$1
+shift
+
+load_config
+gateway=$(resolved_gateway)
+
+case $cmd in
+    doctor)
+        cmd_doctor "$@"
+        ;;
+    image)
+        if [ "$#" -eq 0 ]; then
+            die_usage "image requires a subcommand: build"
+        fi
+        sub=$1
+        shift
+        case $sub in
+            build) cmd_image_build "$@" ;;
+            *) die_usage "unknown image subcommand: $sub" ;;
+        esac
+        ;;
+    init|up)
+        cmd_up "$@"
+        ;;
+    maki)
+        cmd_maki "$@"
+        ;;
+    run)
+        cmd_run "$@"
+        ;;
+    upload)
+        cmd_upload "$@"
+        ;;
+    download)
+        cmd_download "$@"
+        ;;
+    status)
+        cmd_status "$@"
+        ;;
+    list)
+        cmd_list "$@"
+        ;;
+    logs)
+        cmd_logs "$@"
+        ;;
+    policy)
+        if [ "$#" -eq 0 ]; then
+            die_usage "policy requires a subcommand: show, edit, apply"
+        fi
+        sub=$1
+        shift
+        case $sub in
+            show) cmd_policy_show "$@" ;;
+            edit) cmd_policy_edit "$@" ;;
+            apply) cmd_policy_apply "$@" ;;
+            *) die_usage "unknown policy subcommand: $sub" ;;
+        esac
+        ;;
+    provider)
+        if [ "$#" -eq 0 ]; then
+            die_usage "provider requires a subcommand: add, attach, list"
+        fi
+        sub=$1
+        shift
+        case $sub in
+            add) cmd_provider_add "$@" ;;
+            attach) cmd_provider_attach "$@" ;;
+            list) cmd_provider_list "$@" ;;
+            *) die_usage "unknown provider subcommand: $sub" ;;
+        esac
+        ;;
+    start)
+        cmd_start "$@"
+        ;;
+    stop)
+        cmd_stop "$@"
+        ;;
+    rm)
+        cmd_rm "$@"
+        ;;
+    fish)
+        if [ "$#" -eq 0 ]; then
+            die_usage "fish requires a subcommand: install, uninstall"
+        fi
+        sub=$1
+        shift
+        case $sub in
+            install) cmd_fish_install "$@" ;;
+            uninstall) cmd_fish_uninstall "$@" ;;
+            *) die_usage "unknown fish subcommand: $sub" ;;
+        esac
+        ;;
+    help)
+        usage
+        ;;
+    *)
+        die_usage "unknown command: $cmd"
+        ;;
+esac
+
+exit 0
