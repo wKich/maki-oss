@@ -23,6 +23,7 @@ EX_GATEWAY=3  # gateway or sandbox operation failed
 
 NL='
 '
+TAB=$(printf '\t')
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -62,8 +63,10 @@ Commands:
                                 image, policy, providers)
   image build                   Build the Maki sandbox image
   init, up                      Create or start this project's sandbox
-  maki                          Attach an interactive Maki session
-  run "<prompt>"                Run Maki headless and print its JSON output
+  maki                          Ensure the sandbox and attach an interactive
+                                Maki session (bare `maki-oss` does the same)
+  run "<prompt>"                Ensure the sandbox, run Maki headless, and
+                                print its JSON output
   upload [PATH] [DEST]          Copy local files into the sandbox
   download [SANDBOX_PATH] DEST  Copy files from the sandbox to the host
   status                        Show this project's sandbox
@@ -73,11 +76,13 @@ Commands:
   rm [--yes]                    Delete the sandbox (confirmation required)
   policy show|edit|apply        Work with the sandbox policy
   provider add|attach|list      Work with provider credentials
+  provider setup                Set up a provider from a stored or generic key
   fish install|uninstall        Install or remove the fish plugin
   help                          Show this help
 
 Common options:
-  --name NAME      Sandbox name (default: maki-<project directory>)
+  --name NAME      Sandbox name (default: maki-<project directory>), or the
+                   provider name for provider setup
   --image REF      Sandbox image (default: maki-agent:local)
   --policy FILE    Sandbox policy YAML
   --provider NAME  Attach a provider at creation (repeatable)
@@ -86,13 +91,24 @@ Common options:
   --engine NAME    Container engine: docker or podman
   --gateway NAME   OpenShell gateway to use
   --workdir PATH   In-sandbox project directory (default: /sandbox/project)
-  --env KEY=VALUE  Non-secret environment variable at creation (repeatable)
+  --env KEY=VALUE  Non-secret environment variable at creation (repeatable);
+                   for provider setup, the host variable name to read
   --allow-env KEY  Allow a credential-like key passed with --env (repeatable)
-  --yes            Skip the confirmation prompt for rm and policy set
+  --model SPEC     Model for sessions and run (provider/model)
+  --no-sync        Session commands: skip the download back to the host on
+                   exit (default: download the project and merge it in)
+  --yes            Skip confirmation prompts (rm, policy set, provider setup)
+  --from STORE     provider setup credential store: maki or opencode
+  --file PATH      provider setup JSON credential file
+  --field PATH     Field path to read from --file (default: .api_key)
+  --profile FILE   provider setup profile file (default: the curated catalog)
+  --attach         provider setup: attach the provider to the project sandbox
+  --no-attach      provider setup: never attach, even interactively
   --tail, --since, --source, --level, -n  Options for logs
   --full, --base   Options for policy show
   --type, --credential, --config, --from-existing, --runtime-credentials,
-  --global-profile  Options for provider add
+  --global-profile  Options for provider add (provider setup uses
+                   --credential as the store slug)
   --maki-version V Build argument for image build (default: $MAKI_VERSION)
 
 Exit codes: 0 success, 1 usage error, 2 dependency error, 3 gateway error.
@@ -140,16 +156,13 @@ config_sandbox_name=
 config_engine=
 config_gateway=
 config_workdir=
+config_model=
 
-# Read the config file as data. The awk parser accepts `key = "value"`,
-# comments, and blank lines, and reports unknown keys; the file is never
-# sourced, so it cannot execute code.
-load_config() {
-    if [ ! -f "$config_file" ]; then
-        return 0
-    fi
-    config_tmp=${TMPDIR:-/tmp}/maki-oss-config.$$
-    if ! (umask 077 && awk '
+# Parse the config file as data and print `key<TAB>value` lines. The parser
+# accepts `key = "value"`, comments, and blank lines, and reports unknown
+# keys; the file is never sourced, so it cannot execute code.
+parse_config_file() { # FILE
+    awk '
         BEGIN {
             known["image"] = 1
             known["policy"] = 1
@@ -160,6 +173,7 @@ load_config() {
             known["engine"] = 1
             known["gateway"] = 1
             known["workdir"] = 1
+            known["model"] = 1
             errors = 0
         }
         function problem(message) {
@@ -192,7 +206,26 @@ load_config() {
             print key "\t" quoted
         }
         END { exit (errors > 0 ? 1 : 0) }
-    ' "$config_file" >"$config_tmp"); then
+    ' "$1"
+}
+
+# Read the config file into the config_* variables.
+load_config() {
+    config_image=
+    config_policy=
+    config_providers=
+    config_cpu=
+    config_memory=
+    config_sandbox_name=
+    config_engine=
+    config_gateway=
+    config_workdir=
+    config_model=
+    if [ ! -f "$config_file" ]; then
+        return 0
+    fi
+    config_tmp=${TMPDIR:-/tmp}/maki-oss-config.$$
+    if ! (umask 077 && parse_config_file "$config_file" >"$config_tmp"); then
         rm -f "$config_tmp"
         err "invalid configuration in $config_file"
         exit "$EX_USAGE"
@@ -210,6 +243,7 @@ load_config() {
             engine)       config_engine=$value ;;
             gateway)      config_gateway=$value ;;
             workdir)      config_workdir=$value ;;
+            model)        config_model=$value ;;
             '') ;;
             *)
                 config_unknown=$key
@@ -282,6 +316,10 @@ resolved_gateway() {
     resolve_setting "$opt_gateway" "${MAKI_OSS_GATEWAY:-}" "$config_gateway" ""
 }
 
+resolved_model() {
+    resolve_setting "$opt_model" "${MAKI_OSS_MODEL:-}" "$config_model" ""
+}
+
 project_basename=$(basename -- "$PWD")
 project_name=$(printf '%s' "$project_basename" | tr -c 'A-Za-z0-9_.-' '-')
 project_name=$(printf '%s' "$project_name" | sed 's/--*/-/g; s/^-//; s/-$//')
@@ -302,6 +340,91 @@ resolved_name() {
         die_usage "resolved sandbox name is empty; check sandbox_name/--name"
     fi
     printf '%s' "$resolved_name_value"
+}
+
+# ---------------------------------------------------------------------------
+# Config writing
+#
+# The config file is still read as data (never sourced). A writer replaces
+# only the targeted line, keeps every other line verbatim, validates the
+# result with the same parser, and then atomically renames the temp file.
+# ---------------------------------------------------------------------------
+
+config_escape_value() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+config_set_value() { # KEY VALUE
+    config_set_key=$1
+    config_set_new=$2
+    config_set_dir=$(dirname -- "$config_file")
+    if [ ! -d "$config_set_dir" ]; then
+        mkdir -p -- "$config_set_dir" \
+            || die_dep "cannot create config directory: $config_set_dir"
+    fi
+    config_set_tmp=$config_file.$$
+    config_set_escaped=$(config_escape_value "$config_set_new")
+    if [ -f "$config_file" ]; then
+        awk -v key="$config_set_key" -v value="$config_set_escaped" '
+            BEGIN { done = 0 }
+            {
+                if (!done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
+                    print key " = \"" value "\""
+                    done = 1
+                    next
+                }
+                print
+            }
+            END {
+                if (!done) {
+                    print key " = \"" value "\""
+                }
+            }
+        ' "$config_file" >"$config_set_tmp" \
+            || { rm -f "$config_set_tmp"; die_dep "failed to rewrite $config_file"; }
+    else
+        {
+            printf '# maki-oss configuration. See the repository examples/config.toml.\n'
+            printf '%s = "%s"\n' "$config_set_key" "$config_set_escaped"
+        } >"$config_set_tmp"
+    fi
+    if ! parse_config_file "$config_set_tmp" >/dev/null 2>&1; then
+        rm -f "$config_set_tmp"
+        die_usage "refusing to write invalid configuration to $config_file"
+    fi
+    mv -- "$config_set_tmp" "$config_file" \
+        || { rm -f "$config_set_tmp"; die_dep "cannot replace $config_file"; }
+}
+
+# Adds NAME to the config `providers` list (deduplicated) and updates the
+# in-memory value. Only provider instance names are stored, never credentials.
+remember_provider() { # NAME
+    remember_name=$1
+    if [ -n "$config_providers" ]; then
+        remember_found=0
+        while IFS= read -r remember_existing; do
+            if [ "$remember_existing" = "$remember_name" ]; then
+                remember_found=1
+                break
+            fi
+        done <<REMEMBER_LIST
+$(split_csv "$config_providers")
+REMEMBER_LIST
+        if [ "$remember_found" -eq 1 ]; then
+            return 0
+        fi
+        remember_list="$config_providers,$remember_name"
+    else
+        remember_list=$remember_name
+    fi
+    config_set_value providers "$remember_list"
+    config_providers=$remember_list
+}
+
+# Sets the config `model` value and updates the in-memory value.
+remember_model() { # MODEL
+    config_set_value model "$1"
+    config_model=$1
 }
 
 # ---------------------------------------------------------------------------
@@ -601,67 +724,282 @@ cmd_up() {
                 ;;
         esac
     else
-        providers=$(providers_value)
-        cpu=$(resolve_setting "$opt_cpu" "${MAKI_OSS_CPU:-}" "$config_cpu" "")
-        memory=$(resolve_setting "$opt_memory" "${MAKI_OSS_MEMORY:-}" "$config_memory" "")
         say "Creating sandbox '$name' from $image..."
-        set -- sandbox create --name "$name" --from "$image" --policy "$policy" --detach
-        if [ -n "$cpu" ]; then
-            set -- "$@" --cpu "$cpu"
-        fi
-        if [ -n "$memory" ]; then
-            set -- "$@" --memory "$memory"
-        fi
-        if [ -n "$providers" ]; then
-            saved_ifs=$IFS
-            IFS=$NL
-            set -f
-            # shellcheck disable=SC2086
-            for provider in $providers; do
-                if [ -n "$provider" ]; then
-                    set -- "$@" --provider "$provider"
-                fi
-            done
-            set +f
-            IFS=$saved_ifs
-        fi
+        run_sandbox_create "$name"
+    fi
+    say "Sandbox '$name' is ready. Next: $PROGRAM upload ."
+}
+
+# Builds and runs `openshell sandbox create` for the resolved settings. The
+# caller prints user-facing messages; this function prints nothing itself.
+run_sandbox_create() { # NAME
+    create_name=$1
+    create_image=$(resolved_image)
+    create_policy=$(resolved_policy)
+    create_providers=$(providers_value)
+    create_cpu=$(resolve_setting "$opt_cpu" "${MAKI_OSS_CPU:-}" "$config_cpu" "")
+    create_memory=$(resolve_setting "$opt_memory" "${MAKI_OSS_MEMORY:-}" "$config_memory" "")
+    set -- sandbox create --name "$create_name" --from "$create_image" --policy "$create_policy" --detach
+    if [ -n "$create_cpu" ]; then
+        set -- "$@" --cpu "$create_cpu"
+    fi
+    if [ -n "$create_memory" ]; then
+        set -- "$@" --memory "$create_memory"
+    fi
+    if [ -n "$create_providers" ]; then
         saved_ifs=$IFS
         IFS=$NL
         set -f
         # shellcheck disable=SC2086
-        for env_pair in $opt_envs; do
-            if [ -n "$env_pair" ]; then
-                set -- "$@" --env "$env_pair"
+        for create_provider in $create_providers; do
+            if [ -n "$create_provider" ]; then
+                set -- "$@" --provider "$create_provider"
             fi
         done
         set +f
         IFS=$saved_ifs
+    fi
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for env_pair in $opt_envs; do
+        if [ -n "$env_pair" ]; then
+            set -- "$@" --env "$env_pair"
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+    run_gateway "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Session ensure and sync-back
+#
+# Bare `maki-oss`, `maki-oss maki`, and `maki-oss run` share
+# ensure_project_sandbox: remembered providers drive creation and attachment,
+# the project is uploaded only when the sandbox is created, and every session
+# downloads changes back to the host on exit.
+# ---------------------------------------------------------------------------
+
+note() { printf '%s\n' "$*" >&2; }
+
+session_armed=0
+sync_finished=0
+
+arm_sync() {
+    session_armed=1
+    trap 'sync_exit_hook' EXIT
+}
+
+# shellcheck disable=SC2329  # invoked via trap
+sync_exit_hook() {
+    sync_hook_rc=$?
+    trap - EXIT
+    if [ "$session_armed" -eq 1 ]; then
+        session_armed=0
+        sync_project_back
+    fi
+    exit "$sync_hook_rc"
+}
+
+# shellcheck disable=SC2329  # invoked via trap and by sync_exit_hook
+sync_project_back() {
+    if [ "$sync_finished" -eq 1 ]; then
+        return 0
+    fi
+    sync_finished=1
+    if [ "$opt_no_sync" -eq 1 ]; then
+        note "Skipped download (--no-sync); copy changes with '$PROGRAM download'."
+        return 0
+    fi
+    sync_name=$(resolved_name)
+    sync_workdir=$(resolved_workdir)
+    sync_rc=0
+    # OpenShell merges into an existing destination (matching paths are
+    # overwritten, host-only files are preserved) and downloads the source
+    # directory's contents without nesting. Output goes to stderr so `run`
+    # stdout carries only Maki's output.
+    os sandbox download "$sync_name" "$sync_workdir" "$PWD" >&2 || sync_rc=$?
+    if [ "$sync_rc" -ne 0 ]; then
+        warn "download failed (exit status $sync_rc); local files were left unchanged"
+        return 0
+    fi
+    note "Synced sandbox changes back to $PWD."
+    return 0
+}
+
+# Fails before any sandbox mutation when no provider is remembered; on a TTY
+# it runs the provider setup wizard inline and continues.
+ensure_provider_list() {
+    ensure_known_providers=$(providers_value)
+    if [ -z "$ensure_known_providers" ] && is_interactive; then
+        say "No provider is configured yet; starting provider setup."
+        cmd_provider_setup
+        load_config
+        ensure_known_providers=$(providers_value)
+    fi
+    if [ -z "$ensure_known_providers" ]; then
+        err "no provider is configured; run '$PROGRAM provider setup' first"
+        exit "$EX_USAGE"
+    fi
+    ensure_gateway_providers=''
+    if ! ensure_gateway_providers=$(os provider list --names 2>/dev/null); then
+        die_gateway "cannot list providers; is the gateway running? Try '$PROGRAM doctor'"
+    fi
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for ensure_provider in $ensure_known_providers; do
+        if [ -z "$ensure_provider" ]; then
+            continue
+        fi
+        if ! printf '%s\n' "$ensure_gateway_providers" | grep -Fqx -- "$ensure_provider"; then
+            set +f
+            IFS=$saved_ifs
+            err "provider '$ensure_provider' is not known to the gateway; run '$PROGRAM provider setup'"
+            exit "$EX_USAGE"
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+}
+
+wait_for_sandbox_ready() { # NAME
+    wait_phase=$(sandbox_phase "$1")
+    wait_attempts=0
+    while [ "$wait_phase" != Ready ]; do
+        case $wait_phase in
+            Starting|Provisioning) ;;
+            '')
+                die_gateway "sandbox '$1' disappeared while waiting for readiness"
+                ;;
+            *)
+                die_gateway "sandbox '$1' is in phase '$wait_phase'; run '$PROGRAM status' and '$PROGRAM logs' to investigate"
+                ;;
+        esac
+        wait_attempts=$((wait_attempts + 1))
+        if [ "$wait_attempts" -gt 60 ]; then
+            die_gateway "sandbox '$1' is still '$wait_phase' after 120 seconds"
+        fi
+        sleep 2
+        wait_phase=$(sandbox_phase "$1")
+    done
+}
+
+ensure_attach_missing() { # NAME
+    ensure_attach_providers=$(providers_value)
+    [ -n "$ensure_attach_providers" ] || return 0
+    ensure_attached=$(attached_providers "$1")
+    saved_ifs=$IFS
+    IFS=$NL
+    set -f
+    # shellcheck disable=SC2086
+    for ensure_provider in $ensure_attach_providers; do
+        if [ -z "$ensure_provider" ]; then
+            continue
+        fi
+        if ! printf '%s\n' "$ensure_attached" | grep -Fqx -- "$ensure_provider"; then
+            note "Attaching provider '$ensure_provider'..."
+            run_gateway sandbox provider attach "$1" "$ensure_provider" --wait
+        fi
+    done
+    set +f
+    IFS=$saved_ifs
+}
+
+ensure_sandbox_created=0
+
+ensure_project_sandbox() {
+    ensure_provider_list
+    name=$(resolved_name)
+    phase=$(sandbox_phase "$name")
+    if [ -n "$phase" ]; then
+        case $phase in
+            Ready)
+                note "Reusing sandbox '$name'."
+                ;;
+            Stopped|Completed|Error)
+                note "Starting sandbox '$name' (phase: $phase)..."
+                run_gateway sandbox start "$name"
+                wait_for_sandbox_ready "$name"
+                ;;
+            *)
+                note "Waiting for sandbox '$name' (phase: $phase)..."
+                wait_for_sandbox_ready "$name"
+                ;;
+        esac
+    else
+        ensure_policy=$(resolved_policy)
+        if [ ! -f "$ensure_policy" ]; then
+            die_dep "policy file not found: $ensure_policy (pass --policy or fix the config)"
+        fi
+        note "Creating sandbox '$name'..."
+        run_sandbox_create "$name"
+        ensure_sandbox_created=1
+        wait_for_sandbox_ready "$name"
+    fi
+    if [ "$ensure_sandbox_created" -eq 1 ]; then
+        workdir=$(resolved_workdir)
+        note "Uploading the project to '$name:$workdir'..."
+        set -- sandbox upload
+        if [ "$opt_no_git_ignore" -eq 1 ]; then
+            set -- "$@" --no-git-ignore
+        fi
+        set -- "$@" "$name" . "$workdir"
         run_gateway "$@"
     fi
-    say "Sandbox '$name' is ready. Next: $PROGRAM upload ."
+    ensure_attach_missing "$name"
 }
 
 cmd_maki() {
     [ "$#" -eq 0 ] || die_usage "maki takes no arguments"
     require_openshell
+    ensure_project_sandbox
     name=$(resolved_name)
-    require_sandbox "$name"
     workdir=$(resolved_workdir)
+    model=$(resolved_model)
+    arm_sync
+    session_interrupted=0
+    trap 'session_interrupted=1' INT TERM
     maki_rc=0
-    os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki || maki_rc=$?
+    if [ -n "$model" ]; then
+        os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki --model "$model" || maki_rc=$?
+    else
+        os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki || maki_rc=$?
+    fi
+    trap - INT TERM
+    if [ "$session_interrupted" -eq 1 ] && [ "$maki_rc" -eq 0 ]; then
+        maki_rc=130
+    fi
     exit "$maki_rc"
 }
 
 cmd_run() {
-    [ "$#" -ge 1 ] || die_usage "usage: maki-oss run \"<prompt>\""
+    [ "$#" -ge 1 ] || die_usage "usage: maki-oss run \"<prompt>\" [--model provider/model]"
     require_openshell
+    # Ensure messages go to stderr so stdout carries only Maki's output.
+    ensure_project_sandbox >&2
     name=$(resolved_name)
-    require_sandbox "$name"
     workdir=$(resolved_workdir)
+    model=$(resolved_model)
     prompt=$*
+    arm_sync
+    session_interrupted=0
+    trap 'session_interrupted=1' INT TERM
     run_rc=0
-    os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
-        maki --print --yolo --trust --output-format json "$prompt" || run_rc=$?
+    if [ -n "$model" ]; then
+        os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
+            maki --print --yolo --trust --output-format json --model "$model" "$prompt" || run_rc=$?
+    else
+        os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
+            maki --print --yolo --trust --output-format json "$prompt" || run_rc=$?
+    fi
+    trap - INT TERM
+    if [ "$session_interrupted" -eq 1 ] && [ "$run_rc" -eq 0 ]; then
+        run_rc=130
+    fi
     exit "$run_rc"
 }
 
@@ -904,6 +1242,8 @@ cmd_provider_add() {
     IFS=$saved_ifs
     run_gateway "$@"
     say "Provider '$provider' created."
+    remember_provider "$provider"
+    say "Remembered provider '$provider' in $config_file."
 }
 
 cmd_provider_attach() {
@@ -924,6 +1264,879 @@ cmd_provider_list() {
     [ "$#" -eq 0 ] || die_usage "provider list takes no arguments"
     require_openshell
     run_gateway provider list
+}
+
+# ---------------------------------------------------------------------------
+# provider setup: stored credentials -> profile -> provider -> attach
+#
+# Reads credentials from the Maki (~/.local/state/maki/auth) and OpenCode
+# (~/.local/share/opencode/auth.json) stores, or from a JSON file, a host
+# environment variable, or a hidden prompt. Credential values are only ever
+# exported into the environment of the openshell child process: never placed
+# in argv, files, or output.
+# ---------------------------------------------------------------------------
+
+profiles_dir=$repo_root/examples/providers
+helper_profiles_dir=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}/maki-openshell/profiles
+maki_auth_dir=${HOME:-/tmp}/.local/state/maki/auth
+opencode_auth_file=${HOME:-/tmp}/.local/share/opencode/auth.json
+
+setup_tmp=
+# shellcheck disable=SC2329  # invoked via trap
+setup_cleanup() {
+    if [ -n "$setup_tmp" ] && [ -d "$setup_tmp" ]; then
+        rm -rf "$setup_tmp"
+    fi
+}
+trap setup_cleanup EXIT INT TERM
+
+# Interactive when stdin is a terminal. MAKI_OSS_INTERACTIVE=1 treats piped
+# stdin as interactive for scripted runs (tests, `printf ... | maki-oss`).
+is_interactive() {
+    if [ -t 0 ]; then
+        return 0
+    fi
+    if [ -n "${MAKI_OSS_INTERACTIVE:-}" ]; then
+        return 0
+    fi
+    return 1
+}
+
+reply=
+ask() {
+    printf '%s' "$1"
+    if ! IFS= read -r reply; then
+        err "input ended before the prompt was answered"
+        exit "$EX_USAGE"
+    fi
+}
+
+# Hidden input: stty -echo only on a real terminal; piped input is read as is.
+ask_hidden() {
+    printf '%s' "$1"
+    if [ -t 0 ] && stty -echo 2>/dev/null; then
+        if ! IFS= read -r reply; then
+            stty echo 2>/dev/null || true
+            err "input ended before the prompt was answered"
+            exit "$EX_USAGE"
+        fi
+        stty echo 2>/dev/null || true
+        printf '\n'
+        return 0
+    fi
+    if ! IFS= read -r reply; then
+        err "input ended before the prompt was answered"
+        exit "$EX_USAGE"
+    fi
+}
+
+confirm() {
+    ask "$1"
+    case ${reply:-} in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+auth_label() {
+    case $1 in
+        api) printf 'api-key' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+first_line() {
+    printf '%s\n' "$1" | head -n 1
+}
+
+valid_kebab() {
+    case $1 in
+        ''|*[!a-z0-9-]*|-*|*--*|*-) return 1 ;;
+    esac
+    return 0
+}
+
+valid_env_name() {
+    case $1 in
+        [A-Za-z_][A-Za-z0-9_]*) return 0 ;;
+    esac
+    return 1
+}
+
+valid_host() {
+    case $1 in
+        ''|*[!A-Za-z0-9.-]*|.*|*.|*..*) return 1 ;;
+    esac
+    return 0
+}
+
+valid_api_path() {
+    case $1 in
+        '') return 0 ;;
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case $1 in
+        *[!A-Za-z0-9._/*-]*) return 1 ;;
+    esac
+    return 0
+}
+
+# Prints the string value of a single-level JSON key, or nothing.
+json_string_field() { # FILE KEY
+    if [ "$have_jq" -eq 1 ]; then
+        jq -r --arg k "$2" '
+            if (has($k) and (.[$k] | type) == "string") then .[$k] else empty end
+        ' "$1" 2>/dev/null || true
+    else
+        sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null \
+            | head -n 1
+    fi
+}
+
+# Prints the string value at a dotted field path. jq handles nested paths;
+# the fallback covers single-level keys only and fails for nested ones.
+json_path_field() { # FILE PATH
+    json_path_file=$1
+    json_path_key=$2
+    if [ "$have_jq" -eq 1 ]; then
+        jq -r --arg p "$json_path_key" '
+            ($p | split(".")) as $keys
+            | try (getpath($keys) | if type == "string" then . else empty end) catch empty
+        ' "$json_path_file" 2>/dev/null || true
+        return 0
+    fi
+    case $json_path_key in
+        .*) json_path_key=${json_path_key#.} ;;
+    esac
+    case $json_path_key in
+        *.*)
+            warn "jq is not installed; nested field paths are not supported"
+            return 1
+            ;;
+    esac
+    sed -n 's/.*"'"$json_path_key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$json_path_file" 2>/dev/null | head -n 1
+}
+
+# Classifies a standalone credential object without reading the value.
+classify_credential_file() { # FILE -> api | oauth | unknown
+    if [ "$have_jq" -eq 1 ]; then
+        jq -r '
+            if ((has("api_key") and (.api_key | type) == "string")
+                or (has("key") and (.key | type) == "string")) then "api"
+            elif (has("access") or has("refresh")
+                or has("access_token") or has("refresh_token")) then "oauth"
+            else "unknown" end
+        ' "$1" 2>/dev/null || printf 'unknown\n'
+    else
+        if grep -q '"api_key"[[:space:]]*:' "$1" 2>/dev/null \
+            || grep -q '"key"[[:space:]]*:' "$1" 2>/dev/null; then
+            printf 'api\n'
+        elif grep -q '"access"[[:space:]]*:' "$1" 2>/dev/null \
+            || grep -q '"refresh"[[:space:]]*:' "$1" 2>/dev/null; then
+            printf 'oauth\n'
+        else
+            printf 'unknown\n'
+        fi
+    fi
+}
+
+# Auth type of one OpenCode store entry, without reading the value.
+opencode_entry_type() { # SLUG
+    if [ "$have_jq" -eq 1 ]; then
+        jq -r --arg s "$1" '
+            (.[$s] // empty)
+            | (.type // (if has("key") then "api"
+                elif (has("access") or has("refresh")) then "oauth"
+                else "unknown" end))
+        ' "$opencode_auth_file" 2>/dev/null || printf 'unknown\n'
+    else
+        awk -v slug="$1" '
+            $0 ~ ("^[[:space:]]*\"" slug "\"[[:space:]]*:") { inside = 1; next }
+            inside && /"type"[[:space:]]*:/ {
+                line = $0
+                sub(/.*"type"[[:space:]]*:[[:space:]]*"/, "", line)
+                sub(/".*/, "", line)
+                print line
+                exit
+            }
+        ' "$opencode_auth_file" 2>/dev/null
+    fi
+}
+
+store_credential_file() { # STORE SLUG
+    case $1 in
+        maki)
+            if [ -f "$maki_auth_dir/$2.json" ]; then
+                printf '%s\n' "$maki_auth_dir/$2.json"
+            elif [ -f "$maki_auth_dir/plugins/$2.json" ]; then
+                printf '%s\n' "$maki_auth_dir/plugins/$2.json"
+            fi
+            ;;
+        opencode)
+            if [ -f "$opencode_auth_file" ]; then
+                printf '%s\n' "$opencode_auth_file"
+            fi
+            ;;
+    esac
+}
+
+opencode_value_fallback() { # SLUG FILE
+    awk -v slug="$1" '
+        $0 ~ ("^[[:space:]]*\"" slug "\"[[:space:]]*:") { inside = 1; next }
+        inside && /"key"[[:space:]]*:/ {
+            line = $0
+            sub(/.*"key"[[:space:]]*:[[:space:]]*"/, "", line)
+            sub(/".*/, "", line)
+            print line
+            exit
+        }
+        inside && /^[[:space:]]*}[[:space:]]*,?[[:space:]]*$/ { inside = 0 }
+    ' "$2" 2>/dev/null
+}
+
+# Prints the credential value for an API-key store entry.
+credential_value_for() { # STORE SLUG FILE
+    case $1 in
+        maki)
+            credential_value=$(json_string_field "$3" api_key)
+            if [ -z "$credential_value" ]; then
+                credential_value=$(json_string_field "$3" key)
+            fi
+            ;;
+        opencode)
+            if [ "$have_jq" -eq 1 ]; then
+                credential_value=$(jq -r --arg s "$2" '(.[$s] // empty) | (.key // empty)' "$3" 2>/dev/null || true)
+            else
+                credential_value=$(opencode_value_fallback "$2" "$3")
+            fi
+            ;;
+        *)
+            credential_value=
+            ;;
+    esac
+    if [ -z "$credential_value" ]; then
+        return 1
+    fi
+    printf '%s\n' "$credential_value"
+}
+
+# Appends "store<TAB>slug<TAB>auth<TAB>file" lines; never reads values.
+scan_stores() { # OUT
+    scan_out=$1
+    : >"$scan_out"
+    for scan_dir in "$maki_auth_dir" "$maki_auth_dir/plugins"; do
+        if [ ! -d "$scan_dir" ]; then
+            continue
+        fi
+        for scan_file in "$scan_dir"/*.json; do
+            if [ ! -f "$scan_file" ]; then
+                continue
+            fi
+            scan_slug=$(basename -- "$scan_file" .json)
+            scan_auth=$(classify_credential_file "$scan_file")
+            printf 'maki\t%s\t%s\t%s\n' "$scan_slug" "$scan_auth" "$scan_file" >>"$scan_out"
+        done
+    done
+    if [ -f "$opencode_auth_file" ]; then
+        if [ "$have_jq" -eq 1 ]; then
+            jq -r --arg f "$opencode_auth_file" '
+                to_entries[]
+                | ["opencode", .key,
+                    ((.value.type // "unknown")
+                     | if . == "api" or . == "api_key" then "api"
+                       elif . == "oauth" then "oauth"
+                       else "unknown" end),
+                    $f]
+                | @tsv
+            ' "$opencode_auth_file" 2>/dev/null >>"$scan_out" || true
+        else
+            awk -v file="$opencode_auth_file" '
+                /^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*\{/ {
+                    slug = $0
+                    sub(/^[[:space:]]*"/, "", slug)
+                    sub(/".*/, "", slug)
+                    next
+                }
+                slug != "" && /"type"[[:space:]]*:/ {
+                    line = $0
+                    sub(/.*"type"[[:space:]]*:[[:space:]]*"/, "", line)
+                    sub(/".*/, "", line)
+                    type = "unknown"
+                    if (line == "oauth") type = "oauth"
+                    else if (line == "api" || line == "api_key") type = "api"
+                    printf "opencode\t%s\t%s\t%s\n", slug, type, file
+                    slug = ""
+                }
+            ' "$opencode_auth_file" >>"$scan_out"
+        fi
+    fi
+    return 0
+}
+
+list_count=0
+list_credentials() { # FILE [STORE_FILTER]
+    list_file=$1
+    list_filter=${2:-}
+    list_count=0
+    # shellcheck disable=SC2034  # the file column is only displayed elsewhere
+    while IFS=$TAB read -r list_store list_slug list_auth list_file_column; do
+        if [ -z "$list_store" ]; then
+            continue
+        fi
+        if [ -n "$list_filter" ] && [ "$list_store" != "$list_filter" ]; then
+            continue
+        fi
+        list_count=$((list_count + 1))
+        say "  $list_count. $list_store:$list_slug ($(auth_label "$list_auth"))"
+    done <"$list_file"
+}
+
+select_credential() { # FILE FILTER NUMBER
+    select_file=$1
+    select_filter=${2:-}
+    select_want=$3
+    select_index=0
+    while IFS=$TAB read -r select_store select_slug select_auth select_file_column; do
+        if [ -z "$select_store" ]; then
+            continue
+        fi
+        if [ -n "$select_filter" ] && [ "$select_store" != "$select_filter" ]; then
+            continue
+        fi
+        select_index=$((select_index + 1))
+        if [ "$select_index" -eq "$select_want" ]; then
+            selected_store=$select_store
+            selected_slug=$select_slug
+            selected_auth=$select_auth
+            selected_file=$select_file_column
+            return 0
+        fi
+    done <"$select_file"
+    return 1
+}
+
+unsupported_credential() { # STORE SLUG AUTH
+    err "credential '$1:$2' is '$3', which this workflow does not support"
+    err "  API-key credentials are the supported path; for OAuth guidance see docs/migrating-providers.md"
+    exit "$EX_USAGE"
+}
+
+interactive_generic_source() {
+    while :; do
+        say "Credential source:"
+        say "  1. JSON file (field path)"
+        say "  2. Environment variable"
+        say "  3. Hidden prompt"
+        ask "Select 1-3, or q to quit: "
+        case ${reply:-} in
+            1)
+                ask "Path to JSON file: "
+                source_file=${reply:-}
+                if [ ! -f "$source_file" ]; then
+                    say "File not found: $source_file"
+                    continue
+                fi
+                ask "Field path [.api_key]: "
+                source_field=${reply:-}
+                if [ -z "$source_field" ]; then
+                    source_field=.api_key
+                fi
+                if ! cred_value=$(json_path_field "$source_file" "$source_field"); then
+                    say "Nested field paths need jq; install jq and retry."
+                    continue
+                fi
+                if [ -z "$cred_value" ]; then
+                    say "No string value at '$source_field' in $source_file."
+                    continue
+                fi
+                source_kind='file'
+                source_slug=
+                return 0
+                ;;
+            2)
+                ask "Environment variable name: "
+                source_env=${reply:-}
+                if ! valid_env_name "$source_env"; then
+                    say "Invalid variable name."
+                    continue
+                fi
+                cred_value=$(printenv "$source_env" || true)
+                if [ -z "$cred_value" ]; then
+                    say "Variable '$source_env' is not set."
+                    continue
+                fi
+                source_kind='env'
+                source_slug=
+                return 0
+                ;;
+            3)
+                ask_hidden "Credential value (input hidden): "
+                if [ -z "${reply:-}" ]; then
+                    say "No value entered."
+                    continue
+                fi
+                cred_value=$reply
+                source_kind=prompt
+                source_slug=
+                return 0
+                ;;
+            q|Q|quit)
+                return 1
+                ;;
+            *)
+                say "Enter 1, 2, 3, or q."
+                ;;
+        esac
+    done
+}
+
+# Picks a stored credential interactively (optionally from one store).
+interactive_source() { # [STORE_FILTER]
+    interactive_filter=${1:-}
+    scan_stores "$stores_file"
+    interactive_visible=0
+    # shellcheck disable=SC2034
+    while IFS=$TAB read -r int_store int_store_column int_slug_column int_auth_column; do
+        if [ -z "$int_store" ]; then
+            continue
+        fi
+        if [ -n "$interactive_filter" ] && [ "$int_store" != "$interactive_filter" ]; then
+            continue
+        fi
+        interactive_visible=$((interactive_visible + 1))
+    done <"$stores_file"
+
+    if [ "$interactive_visible" -eq 0 ]; then
+        if [ -n "$interactive_filter" ]; then
+            err "no $interactive_filter credentials found"
+            return 1
+        fi
+        say "No stored credentials detected."
+    fi
+
+    while :; do
+        if [ "$interactive_visible" -gt 0 ]; then
+            say "Detected credentials:"
+            list_credentials "$stores_file" "$interactive_filter"
+            ask "Select 1-$list_count, or g for another source, q to quit: "
+        else
+            ask "Use another source? [g=generic, q=quit]: "
+        fi
+        case ${reply:-} in
+            q|Q|quit)
+                return 1
+                ;;
+            g|G|generic)
+                if interactive_generic_source; then
+                    return 0
+                fi
+                ;;
+            ''|*[!0-9]*)
+                say "Enter a number, g, or q."
+                ;;
+            *)
+                if [ "$interactive_visible" -eq 0 ] \
+                    || [ "$reply" -lt 1 ] || [ "$reply" -gt "$list_count" ]; then
+                    say "Enter a number between 1 and $list_count."
+                    continue
+                fi
+                if ! select_credential "$stores_file" "$interactive_filter" "$reply"; then
+                    say "Invalid selection."
+                    continue
+                fi
+                if [ "$selected_auth" != api ]; then
+                    unsupported_credential "$selected_store" "$selected_slug" "$selected_auth"
+                fi
+                if ! cred_value=$(credential_value_for "$selected_store" "$selected_slug" "$selected_file"); then
+                    err "cannot read an API key for '$selected_store:$selected_slug' from $selected_file"
+                    exit "$EX_USAGE"
+                fi
+                source_kind=store
+                source_store=$selected_store
+                source_slug=$selected_slug
+                return 0
+                ;;
+        esac
+    done
+}
+
+profile_field() { # FILE KEY
+    sed -n "s/^$2:[[:space:]]*//p" "$1" | head -n 1
+}
+
+# First env var of the first credential's env_vars list.
+profile_env_var() { # FILE
+    sed -n 's/^[[:space:]]*env_vars:[[:space:]]*\[\([^]]*\)\].*/\1/p' "$1" \
+        | head -n 1 | cut -d, -f1 | tr -d '[:space:]'
+}
+
+catalog_lookup() { # STORE SLUG -> profile id
+    if [ ! -f "$profiles_dir/catalog.tsv" ]; then
+        return 0
+    fi
+    # shellcheck disable=SC2034  # the note column is prose for humans
+    while IFS=$TAB read -r catalog_store catalog_slug catalog_id catalog_file_column; do
+        case $catalog_store in
+            ''|'#'*) continue ;;
+        esac
+        if [ "$catalog_store" = "$1" ] && [ "$catalog_slug" = "$2" ]; then
+            printf '%s\n' "$catalog_id"
+            return 0
+        fi
+    done <"$profiles_dir/catalog.tsv"
+}
+
+generate_custom_profile() { # TEMPLATE ID ENV HOST PATH
+    awk -v id="$2" -v env="$3" -v host="$4" -v path="$5" '
+        /^id:[[:space:]]/ {
+            print "id: " id
+            next
+        }
+        /^display_name:[[:space:]]/ {
+            print "display_name: " id
+            next
+        }
+        /^description:[[:space:]]/ {
+            print "description: Custom inference API for the Maki coding agent"
+            next
+        }
+        /^[[:space:]]+env_vars:[[:space:]]*\[/ {
+            line = $0
+            sub(/\[[^]]*\]/, "[" env "]", line)
+            print line
+            next
+        }
+        /^[[:space:]]+-[[:space:]]+host:[[:space:]]/ {
+            print "  - host: " host
+            if (path != "") {
+                print "    path: " path
+            }
+            next
+        }
+        { print }
+    ' "$1"
+}
+
+profile_exists_in_gateway() { # ID
+    profile_list_json=$(os profile list --type provider -o json --global 2>/dev/null) || return 1
+    if [ "$have_jq" -eq 1 ]; then
+        printf '%s' "$profile_list_json" | jq -e --arg id "$1" 'any(.[]; .id == $id)' >/dev/null 2>&1
+    else
+        printf '%s' "$profile_list_json" | grep -q "\"id\"[[:space:]]*:[[:space:]]*\"$1\""
+    fi
+}
+
+# Runs an openshell command with the credential in the child environment
+# only. The subshell keeps the assignment out of the wizard's environment and
+# the value out of argv.
+run_credential_env() { # VAR VALUE COMMAND...
+    credential_env_name=$1
+    credential_env_value=$2
+    shift 2
+    credential_rc=0
+    (
+        export "$credential_env_name=$credential_env_value"
+        run_gateway "$@"
+    ) || credential_rc=$?
+    if [ "$credential_rc" -ne 0 ]; then
+        exit "$credential_rc"
+    fi
+}
+
+cmd_provider_setup() {
+    [ "$#" -eq 0 ] || die_usage "provider setup takes no arguments"
+    if [ "$have_jq" -eq 0 ]; then
+        warn "jq not found; JSON stores are read with a limited fallback"
+    fi
+
+    setup_tmp=$(mktemp -d "${TMPDIR:-/tmp}/maki-oss-setup.XXXXXX")
+    stores_file=$setup_tmp/credentials.tsv
+
+    source_kind=
+    source_store=
+    source_slug=
+    source_file=
+    source_field=
+    source_env=
+    cred_value=
+
+    if [ -n "$opt_from" ]; then
+        [ -z "$opt_file" ] || die_usage "provider setup accepts one credential source: --from, --file, or --env"
+        [ -z "$opt_envs" ] || die_usage "provider setup accepts one credential source: --from, --file, or --env"
+        source_kind=store
+        source_store=$opt_from
+        case $source_store in
+            maki|opencode) ;;
+            *) die_usage "provider setup --from expects maki or opencode, got '$source_store'" ;;
+        esac
+        case $opt_credentials in
+            *'='*)
+                die_usage "--credential takes the SLUG name only; inline KEY=VALUE is not accepted"
+                ;;
+        esac
+        source_slug=$(first_line "$opt_credentials")
+        if [ -z "$source_slug" ]; then
+            if ! is_interactive; then
+                die_usage "provider setup --from $source_store needs --credential SLUG when stdin is not a terminal"
+            fi
+            if ! interactive_source "$source_store"; then
+                say "Aborted."
+                exit "$EX_USAGE"
+            fi
+        else
+            source_file=$(store_credential_file "$source_store" "$source_slug")
+            if [ -z "$source_file" ]; then
+                err "no '$source_slug' credential in the $source_store store"
+                exit "$EX_USAGE"
+            fi
+            case $source_store in
+                maki) source_auth=$(classify_credential_file "$source_file") ;;
+                opencode) source_auth=$(opencode_entry_type "$source_slug") ;;
+            esac
+            if [ "$source_auth" != api ]; then
+                unsupported_credential "$source_store" "$source_slug" "$source_auth"
+            fi
+            if ! cred_value=$(credential_value_for "$source_store" "$source_slug" "$source_file"); then
+                err "cannot read an API key for '$source_store:$source_slug' from $source_file"
+                exit "$EX_USAGE"
+            fi
+        fi
+    elif [ -n "$opt_file" ]; then
+        [ -z "$opt_envs" ] || die_usage "provider setup accepts one credential source: --from, --file, or --env"
+        source_kind='file'
+        if [ ! -f "$opt_file" ]; then
+            die_usage "provider setup --file: not a file: $opt_file"
+        fi
+        source_field=${opt_field:-.api_key}
+        if ! cred_value=$(json_path_field "$opt_file" "$source_field"); then
+            die_usage "cannot read '$source_field' from $opt_file without jq; install jq or use a single-level field"
+        fi
+        if [ -z "$cred_value" ]; then
+            err "no string value at '$source_field' in $opt_file"
+            exit "$EX_USAGE"
+        fi
+    elif [ -n "$opt_envs" ]; then
+        source_kind='env'
+        source_env=$(first_line "$opt_envs")
+        if ! valid_env_name "$source_env"; then
+            die_usage "provider setup --env expects an environment variable name, got '$source_env'"
+        fi
+        cred_value=$(printenv "$source_env" || true)
+        if [ -z "$cred_value" ]; then
+            err "environment variable '$source_env' is not set (or empty)"
+            exit "$EX_USAGE"
+        fi
+    else
+        if ! is_interactive; then
+            die_usage "provider setup needs a credential source: --from STORE --credential SLUG, --file PATH [--field PATH], or --env VAR (stdin is not a terminal)"
+        fi
+        if ! interactive_source; then
+            say "Aborted."
+            exit "$EX_USAGE"
+        fi
+    fi
+
+    profile_file=
+    profile_id=
+    profile_env=
+    if [ -n "$opt_profile" ]; then
+        profile_file=$opt_profile
+        if [ ! -f "$profile_file" ]; then
+            die_dep "profile file not found: $profile_file"
+        fi
+        profile_id=$(profile_field "$profile_file" id)
+        if [ -z "$profile_id" ]; then
+            die_usage "cannot read a profile id from $profile_file"
+        fi
+    elif [ "$source_kind" = store ]; then
+        catalog_id=$(catalog_lookup "$source_store" "$source_slug")
+        if [ -n "$catalog_id" ]; then
+            profile_id=$catalog_id
+            profile_file=$profiles_dir/$profile_id.yaml
+            if [ ! -f "$profile_file" ]; then
+                die_dep "catalog maps $source_store:$source_slug to '$profile_id', but $profile_file is missing"
+            fi
+            say "Using curated profile '$profile_id'."
+        fi
+    fi
+
+    if [ -z "$profile_file" ]; then
+        if ! is_interactive; then
+            die_usage "no curated profile matches this credential; custom profiles need an interactive terminal (or pass --profile FILE)"
+        fi
+        template_file=$profiles_dir/template.yaml
+        if [ ! -f "$template_file" ]; then
+            die_dep "missing profile template: $template_file"
+        fi
+        custom_default_id=
+        if [ -n "$source_slug" ]; then
+            custom_default_id=maki-$source_slug
+        fi
+        say "No curated profile matches; entering custom provider setup."
+        while :; do
+            if [ -n "$custom_default_id" ]; then
+                ask "Provider id (kebab-case) [$custom_default_id]: "
+                custom_id=${reply:-$custom_default_id}
+            else
+                ask "Provider id (kebab-case): "
+                custom_id=${reply:-}
+            fi
+            if valid_kebab "$custom_id"; then
+                break
+            fi
+            say "Use lowercase letters, digits, and single hyphens (for example: my-provider)."
+        done
+        case $custom_id in
+            maki-*) custom_env_default=$(printf '%s' "${custom_id#maki-}" | tr 'a-z-' 'A-Z_')_API_KEY ;;
+            *) custom_env_default=$(printf '%s' "$custom_id" | tr 'a-z-' 'A-Z_')_API_KEY ;;
+        esac
+        while :; do
+            ask "Credential env var [$custom_env_default]: "
+            custom_env=${reply:-$custom_env_default}
+            if valid_env_name "$custom_env"; then
+                break
+            fi
+            say "Use letters, digits, and underscores; start with a letter or underscore."
+        done
+        while :; do
+            ask "Endpoint host (for example api.example.com): "
+            custom_host=${reply:-}
+            if valid_host "$custom_host"; then
+                break
+            fi
+            say "Enter a hostname such as api.example.com."
+        done
+        custom_path=
+        ask "API path prefix (optional, for example /v1): "
+        custom_path=${reply:-}
+        while ! valid_api_path "$custom_path"; do
+            say "Paths must start with / and use letters, digits, . _ / * - only."
+            ask "API path prefix (optional, for example /v1): "
+            custom_path=${reply:-}
+        done
+        custom_target=$helper_profiles_dir/$custom_id.yaml
+        custom_write=1
+        if [ -e "$custom_target" ]; then
+            if [ "$opt_yes" -eq 1 ]; then
+                say "Overwriting existing generated profile $custom_target."
+            elif confirm "Profile '$custom_target' exists. Overwrite? [y/N] "; then
+                :
+            else
+                say "Keeping existing profile $custom_target."
+                custom_write=0
+            fi
+        fi
+        if [ "$custom_write" -eq 1 ]; then
+            mkdir -p -- "$helper_profiles_dir"
+            ( umask 077; generate_custom_profile "$template_file" "$custom_id" "$custom_env" "$custom_host" "$custom_path" >"$custom_target" )
+            if [ ! -s "$custom_target" ]; then
+                die_dep "failed to generate profile $custom_target from $template_file"
+            fi
+            chmod 600 "$custom_target" 2>/dev/null || true
+            say "Generated profile $custom_target."
+        fi
+        profile_file=$custom_target
+        profile_id=$custom_id
+    fi
+
+    profile_env=$(profile_env_var "$profile_file")
+    if [ -z "$profile_env" ]; then
+        die_usage "cannot read a credential env var from $profile_file (expected: env_vars: [NAME])"
+    fi
+
+    provider_name=${opt_name:-$profile_id}
+    require_openshell
+
+    if ! os provider list --names >"$setup_tmp/providers.txt" 2>/dev/null; then
+        die_gateway "cannot list providers; is the gateway running? Try '$PROGRAM doctor'"
+    fi
+    provider_exists=0
+    if grep -Fqx -- "$provider_name" "$setup_tmp/providers.txt"; then
+        provider_exists=1
+    fi
+    if [ "$provider_exists" -eq 1 ] && [ "$opt_yes" -eq 0 ] && ! is_interactive; then
+        die_usage "provider '$provider_name' already exists; pass --yes to update it (stdin is not a terminal)"
+    fi
+
+    say "Linting profile '$profile_id'..."
+    run_gateway profile lint -f "$profile_file"
+    if profile_exists_in_gateway "$profile_id"; then
+        say "Profile '$profile_id' is already imported."
+    else
+        say "Importing profile '$profile_id' globally..."
+        run_gateway profile import -f "$profile_file" --global
+    fi
+
+    if [ "$provider_exists" -eq 1 ]; then
+        update_now=0
+        if [ "$opt_yes" -eq 1 ]; then
+            update_now=1
+        elif is_interactive \
+            && confirm "Provider '$provider_name' already exists. Update it from the local credential? [y/N] "; then
+            update_now=1
+        fi
+        if [ "$update_now" -eq 1 ]; then
+            run_credential_env "$profile_env" "$cred_value" provider update "$provider_name" --from-existing
+            say "Provider '$provider_name' updated."
+        else
+            say "Keeping existing provider '$provider_name'."
+        fi
+    else
+        run_credential_env "$profile_env" "$cred_value" provider create \
+            --name "$provider_name" --type "$profile_id" --from-existing --global-profile
+        say "Provider '$provider_name' created."
+    fi
+
+    remember_provider "$provider_name"
+    say "Remembered provider '$provider_name' in $config_file."
+
+    sandbox_name=$(resolved_name)
+    sandbox_step_phase=$(sandbox_phase "$sandbox_name")
+    if [ -z "$sandbox_step_phase" ]; then
+        if [ "${opt_attach:-}" = 1 ]; then
+            warn "sandbox '$sandbox_name' not found; skipping attach (run '$PROGRAM up' first)"
+        fi
+    else
+        attach_now=0
+        if [ "${opt_attach:-}" = 1 ]; then
+            attach_now=1
+        elif [ "${opt_attach:-}" = 0 ]; then
+            attach_now=0
+        elif is_interactive \
+            && confirm "Attach provider '$provider_name' to sandbox '$sandbox_name'? [y/N] "; then
+            attach_now=1
+        fi
+        if [ "$attach_now" -eq 1 ]; then
+            run_gateway sandbox provider attach "$sandbox_name" "$provider_name" --wait
+            say "Provider '$provider_name' attached to '$sandbox_name'."
+        fi
+    fi
+
+    if is_interactive; then
+        ask "Default model for sessions (provider/model, Enter to skip): "
+        if [ -n "${reply:-}" ]; then
+            remember_model "$reply"
+            say "Default model set to '$reply'."
+        fi
+    fi
+
+    if [ "$profile_id" = maki-zai-coding ]; then
+        say ""
+        say "Z.AI coding plan: add the following to the sandbox's Maki providers.toml"
+        say "(~/.config/maki/providers.toml) before the first request:"
+        say ""
+        say '  [zai]'
+        say '  plan = "coding"'
+    fi
+
+    unset cred_value
+    say ""
+    say "Next steps:"
+    say "  start a session:               $PROGRAM (from the project directory)"
+    say "  attach to an existing sandbox: $PROGRAM provider attach $provider_name"
+    say "  pick a model headless:         $PROGRAM run --model <provider/model> \"...\""
 }
 
 cmd_image_build() {
@@ -1059,6 +2272,13 @@ opt_runtime_credentials=0
 opt_global_profile=0
 opt_maki_version=
 opt_no_git_ignore=0
+opt_no_sync=0
+opt_from=
+opt_file=
+opt_field=
+opt_profile=
+opt_model=
+opt_attach=
 opt_help=0
 
 append_list() {
@@ -1161,6 +2381,36 @@ while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
             shift
             OPT_I=$((OPT_I + 1))
             ;;
+        --from)
+            [ "$#" -gt 0 ] || die_usage "option --from requires a value"
+            opt_from=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --file)
+            [ "$#" -gt 0 ] || die_usage "option --file requires a value"
+            opt_file=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --field)
+            [ "$#" -gt 0 ] || die_usage "option --field requires a value"
+            opt_field=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --profile)
+            [ "$#" -gt 0 ] || die_usage "option --profile requires a value"
+            opt_profile=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --model)
+            [ "$#" -gt 0 ] || die_usage "option --model requires a value"
+            opt_model=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
         --since)
             [ "$#" -gt 0 ] || die_usage "option --since requires a value"
             opt_since=$1
@@ -1200,7 +2450,10 @@ while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
         --from-existing) opt_from_existing=1 ;;
         --runtime-credentials) opt_runtime_credentials=1 ;;
         --global-profile) opt_global_profile=1 ;;
+        --attach) opt_attach=1 ;;
+        --no-attach) opt_attach=0 ;;
         --no-git-ignore) opt_no_git_ignore=1 ;;
+        --no-sync) opt_no_sync=1 ;;
         -h|--help) opt_help=1 ;;
         --)
             unprocessed=$((OPT_ARGC - OPT_I))
@@ -1226,16 +2479,17 @@ if [ "$opt_help" -eq 1 ]; then
     exit 0
 fi
 
+load_config
+gateway=$(resolved_gateway)
+
+# Bare invocation is the one-command session: ensure the sandbox and attach
+# Maki. Explicit commands fall through to the dispatcher below.
 if [ "$#" -eq 0 ]; then
-    usage >&2
-    exit "$EX_USAGE"
+    cmd_maki
 fi
 
 cmd=$1
 shift
-
-load_config
-gateway=$(resolved_gateway)
 
 case $cmd in
     doctor)
@@ -1291,7 +2545,7 @@ case $cmd in
         ;;
     provider)
         if [ "$#" -eq 0 ]; then
-            die_usage "provider requires a subcommand: add, attach, list"
+            die_usage "provider requires a subcommand: add, attach, list, setup"
         fi
         sub=$1
         shift
@@ -1299,6 +2553,7 @@ case $cmd in
             add) cmd_provider_add "$@" ;;
             attach) cmd_provider_attach "$@" ;;
             list) cmd_provider_list "$@" ;;
+            setup) cmd_provider_setup "$@" ;;
             *) die_usage "unknown provider subcommand: $sub" ;;
         esac
         ;;

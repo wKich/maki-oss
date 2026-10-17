@@ -1,0 +1,36 @@
+# Credential-store slug to OpenShell profile mapping for maki-oss provider setup.
+#
+# Columns, tab-separated:
+#   store       maki | opencode (the credential store the slug comes from)
+#   slug        provider id as stored by that agent
+#   profile-id  file under examples/providers/ (<profile-id>.yaml)
+#   note        short note shown by the setup wizard
+#
+# The wizard looks up "<store>:<slug>" here to resolve a stored credential to
+# its curated profile. Slugs not listed fall through to custom profile
+# generation. Stores: Maki (~/.local/state/maki/auth), OpenCode
+# (~/.local/share/opencode/auth.json).
+maki	anthropic	maki-anthropic	Anthropic API key
+maki	openrouter	maki-openrouter	OpenRouter API key
+maki	deepseek	maki-deepseek	DeepSeek API key
+maki	synthetic	maki-synthetic	Synthetic API key
+maki	openai	maki-openai	OpenAI platform key (ChatGPT OAuth is not supported)
+maki	google	maki-google	Google Gemini API key
+maki	mistral	maki-mistral	Mistral API key
+maki	xai	maki-xai	xAI API key (OAuth is not supported)
+maki	zai	maki-zai	Z.AI pay-as-you-go key
+maki	zhipuai-coding-plan	maki-zai-coding	Z.AI coding-plan key; alias of zai with plan = "coding"
+maki	opencode	maki-opencode	OpenCode Zen API key
+maki	opencode-go	maki-opencode-go	OpenCode Go API key
+opencode	anthropic	maki-anthropic	Anthropic API key
+opencode	openrouter	maki-openrouter	OpenRouter API key
+opencode	deepseek	maki-deepseek	DeepSeek API key
+opencode	synthetic	maki-synthetic	Synthetic API key
+opencode	openai	maki-openai	OpenAI platform key (ChatGPT OAuth is not supported)
+opencode	google	maki-google	Google Gemini API key
+opencode	mistral	maki-mistral	Mistral API key
+opencode	xai	maki-xai	xAI API key (OAuth is not supported)
+opencode	zai	maki-zai	Z.AI pay-as-you-go key
+opencode	zai-coding-plan	maki-zai-coding	Z.AI coding-plan key; alias of zai with plan = "coding"
+opencode	opencode	maki-opencode	OpenCode Zen API key
+opencode	opencode-go	maki-opencode-go	OpenCode Go API key

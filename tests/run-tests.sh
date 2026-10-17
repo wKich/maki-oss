@@ -72,12 +72,22 @@ new_case() {
     EXEC_EXIT=
     GATEWAY_DOWN=
     PROVIDER_NAMES=
+    PROFILE_NAMES=
+    PROFILE_LINT_EXIT=
+    CREDENTIAL_ENV=
+    CREDENTIAL_LOG=
+    DOWNLOAD_EXIT=
+    DOWNLOAD_FIXTURE=
+    INTERACTIVE=
+    TEST_ENV_VALUE=
     PATH_OVERRIDE=
     FISH_PATH=
     RC=0
 }
 
-run_maki() {
+run_maki_with_input() { # STDIN_FILE ARGS...
+    maki_input=$1
+    shift
     RC=0
     (
         cd "${RUN_DIR:-$CASE/project}"
@@ -90,14 +100,37 @@ run_maki() {
         STUB_EXEC_EXIT="${EXEC_EXIT:-0}" \
         STUB_GATEWAY_DOWN="${GATEWAY_DOWN:-0}" \
         STUB_PROVIDER_NAMES="${PROVIDER_NAMES:-}" \
+        STUB_PROFILE_NAMES="${PROFILE_NAMES:-}" \
+        STUB_PROFILE_LINT_EXIT="${PROFILE_LINT_EXIT:-}" \
+        STUB_CREDENTIAL_ENV="${CREDENTIAL_ENV:-}" \
+        STUB_ENV_LOG="${CREDENTIAL_LOG:-}" \
+        STUB_DOWNLOAD_EXIT="${DOWNLOAD_EXIT:-}" \
+        STUB_DOWNLOAD_FIXTURE="${DOWNLOAD_FIXTURE:-}" \
         MAKI_OSS_SANDBOX_NAME="${ENV_NAME:-}" \
         MAKI_OSS_IMAGE="${ENV_IMAGE:-}" \
         MAKI_OSS_POLICY="${ENV_POLICY:-}" \
         MAKI_OSS_PROVIDERS="${ENV_PROVIDERS:-}" \
         MAKI_VERSION="${ENV_MAKI_VERSION:-}" \
         EDITOR="${ENV_EDITOR:-true}" \
-        "$MAKI" "$@" >"$OUT" 2>"$ERR" </dev/null
+        MAKI_OSS_INTERACTIVE="${INTERACTIVE:-}" \
+        MAKI_OSS_TEST_ENV_VALUE="${TEST_ENV_VALUE:-}" \
+        "$MAKI" "$@" >"$OUT" 2>"$ERR" <"$maki_input"
     ) || RC=$?
+}
+
+run_maki() {
+    run_maki_with_input /dev/null "$@"
+}
+
+# Feeds scripted stdin and makes the helper treat it as interactive, so the
+# wizard prompts run under `make test` without a pseudo-terminal. `\n` in the
+# input expands to a newline.
+run_maki_stdin() {
+    maki_stdin_input=$1
+    shift
+    printf '%b\n' "$maki_stdin_input" >"$CASE/stdin.txt"
+    INTERACTIVE=1
+    run_maki_with_input "$CASE/stdin.txt" "$@"
 }
 
 run_fish() {
@@ -125,6 +158,83 @@ seed_sandbox() {
     : >"$STUB_STATE_DIR/providers/$1"
 }
 
+# Records a provider as configured (config file) and known to the gateway
+# (stub provider list), matching what `provider setup` persists in real use.
+seed_remembered_provider() { # NAME
+    mkdir -p "$XDG_CONFIG_HOME/maki-openshell" "$STUB_STATE_DIR"
+    printf 'providers = "%s"\n' "$1" >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    printf '%s\n' "$1" >>"$STUB_STATE_DIR/providers.list"
+}
+
+attach_stub_provider() { # SANDBOX NAME
+    mkdir -p "$STUB_STATE_DIR/providers"
+    printf '%s\n' "$2" >>"$STUB_STATE_DIR/providers/$1"
+}
+
+# Fixture credential stores. Values never touch the fixture files' output in
+# tests; they exist so flows can prove the value reaches the child env only.
+seed_maki_store() { # SLUG VALUE
+    mkdir -p "$HOME/.local/state/maki/auth"
+    printf '{"api_key": "%s"}\n' "$2" >"$HOME/.local/state/maki/auth/$1.json"
+}
+
+seed_maki_plugin_store() { # SLUG VALUE
+    mkdir -p "$HOME/.local/state/maki/auth/plugins"
+    printf '{"api_key": "%s"}\n' "$2" >"$HOME/.local/state/maki/auth/plugins/$1.json"
+}
+
+seed_maki_oauth() { # SLUG
+    mkdir -p "$HOME/.local/state/maki/auth"
+    printf '{"access": "fixture-access-%s", "refresh": "fixture-refresh-%s", "expires": 9999999999}\n' \
+        "$1" "$1" >"$HOME/.local/state/maki/auth/$1.json"
+}
+
+seed_opencode_auth() { # JSON
+    mkdir -p "$HOME/.local/share/opencode"
+    printf '%s\n' "$1" >"$HOME/.local/share/opencode/auth.json"
+}
+
+write_fixture_profile() { # PATH ID ENV
+    cat >"$1" <<EOF
+id: $2
+display_name: Fixture Provider
+description: Test-only provider profile
+category: inference
+inference_capable: true
+credentials:
+  - name: api_key
+    description: Fixture key
+    env_vars: [$3]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: api.fixture.test
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries:
+  - /usr/local/bin/maki
+EOF
+}
+
+# Builds a PATH prefix with the shell tools the helper needs but no jq, so the
+# grep/awk fallbacks are exercised even where jq ships in /usr/bin.
+no_jq_path() {
+    no_jq_dir=$CASE/no-jq-bin
+    mkdir -p "$no_jq_dir"
+    for no_jq_tool in awk basename cat cut dirname grep head mkdir mktemp mv paste printenv rm sed tr; do
+        no_jq_tool_path=$(command -v "$no_jq_tool" 2>/dev/null) || continue
+        if [ ! -e "$no_jq_dir/$no_jq_tool" ]; then
+            ln -s "$no_jq_tool_path" "$no_jq_dir/$no_jq_tool"
+        fi
+    done
+    printf '%s' "$STUB_DIR:$no_jq_dir"
+}
+
 assert_rc() {
     if [ "$RC" -ne "$1" ]; then
         bad "expected exit $1, got $RC (stderr: $(head -n 1 "$ERR" 2>/dev/null))"
@@ -140,6 +250,12 @@ assert_out_has() {
 assert_err_has() {
     if ! grep -Fq -- "$1" "$ERR" 2>/dev/null; then
         bad "stderr missing: $1"
+    fi
+}
+
+assert_out_missing() {
+    if grep -Fq -- "$1" "$OUT" 2>/dev/null; then
+        bad "stdout unexpectedly contains: $1"
     fi
 }
 
@@ -164,6 +280,40 @@ assert_log_missing() {
 assert_log_line_missing() {
     if [ -f "$LOG" ] && grep -Fxq -- "$1" "$LOG"; then
         bad "argv log unexpectedly contains argument: $1"
+    fi
+}
+
+assert_log_before() { # FIRST SECOND
+    if [ ! -f "$LOG" ]; then
+        bad "argv log missing; cannot order '$1' and '$2'"
+        return
+    fi
+    first_seen=$(grep -n -F -m1 -- "$1" "$LOG" | cut -d: -f1)
+    second_seen=$(grep -n -F -m1 -- "$2" "$LOG" | cut -d: -f1)
+    if [ -z "$first_seen" ] || [ -z "$second_seen" ]; then
+        bad "cannot order '$1' and '$2' (one is missing)"
+        return
+    fi
+    if [ "$first_seen" -ge "$second_seen" ]; then
+        bad "'$1' was not logged before '$2'"
+    fi
+}
+
+assert_secret_absent() { # VALUE
+    if [ -f "$LOG" ] && grep -Fq -- "$1" "$LOG"; then
+        bad "argv log leaked the credential"
+    fi
+    if [ -f "$OUT" ] && grep -Fq -- "$1" "$OUT"; then
+        bad "stdout leaked the credential"
+    fi
+    if [ -f "$ERR" ] && grep -Fq -- "$1" "$ERR"; then
+        bad "stderr leaked the credential"
+    fi
+}
+
+assert_credential_env() { # VALUE
+    if ! grep -Fqx -- "$1" "$CREDENTIAL_LOG" 2>/dev/null; then
+        bad "credential was not exported to the openshell child environment"
     fi
 }
 
@@ -295,6 +445,8 @@ test_run_passthrough() {
     RUN_DIR=$CASE/project/myproject
     mkdir -p "$RUN_DIR"
     seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
     EXEC_STDOUT='{"result":"stub-ok"}'
 
     run_maki run "fix the tests"
@@ -322,6 +474,8 @@ test_maki_attach() {
     RUN_DIR=$CASE/project/myproject
     mkdir -p "$RUN_DIR"
     seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
     run_maki maki
     assert_rc 0
     assert_log_has "exec"
@@ -574,12 +728,643 @@ test_provider_inline_secret_rejected() {
     assert_log_missing "super-secret"
 }
 
+test_provider_setup_curated() {
+    begin "provider setup resolves a stored key through the catalog"
+    new_case setup-curated
+    seed_maki_store opencode-go "fixture-opencode-go-key"
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --from maki --credential opencode-go --yes
+    assert_rc 0
+    assert_log_has "profile"
+    assert_log_has "lint"
+    assert_log_line "$ROOT/examples/providers/maki-opencode-go.yaml"
+    assert_log_has "import"
+    assert_log_line "--global"
+    assert_log_before "lint" "import"
+    assert_log_has "create"
+    assert_log_line "maki-opencode-go"
+    assert_log_line "--type"
+    assert_log_line "--from-existing"
+    assert_log_line "--global-profile"
+    assert_log_line_missing "update"
+    assert_credential_env "fixture-opencode-go-key"
+    assert_secret_absent "fixture-opencode-go-key"
+    assert_out_has "Provider 'maki-opencode-go' created."
+}
+
+test_provider_memory() {
+    begin "provider setup remembers names and model without rewriting comments"
+    new_case provider-memory
+    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
+    printf '# keep this comment\nimage = "custom:tag"\n\nproviders = "already-there"\n' \
+        >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    seed_maki_store opencode-go "fixture-memory-key"
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "opencode-go/deepseek-v4.1-flash" provider setup \
+        --from maki --credential opencode-go --yes
+    assert_rc 0
+    config=$XDG_CONFIG_HOME/maki-openshell/config.toml
+    grep -Fq '# keep this comment' "$config" || bad "comment was not preserved"
+    grep -Fq 'image = "custom:tag"' "$config" || bad "unrelated key was not preserved"
+    grep -Fxq 'providers = "already-there,maki-opencode-go"' "$config" \
+        || bad "provider name was not remembered exactly once"
+    grep -Fxq 'model = "opencode-go/deepseek-v4.1-flash"' "$config" \
+        || bad "model was not remembered"
+    if grep -Fq "fixture-memory-key" "$config"; then
+        bad "credential value leaked into the config"
+    fi
+
+    # Re-running keeps the list deduplicated.
+    reset_log
+    INTERACTIVE=
+    run_maki provider setup --from maki --credential opencode-go --yes
+    assert_rc 0
+    grep -Fxq 'providers = "already-there,maki-opencode-go"' "$config" \
+        || bad "re-running duplicated the provider name"
+    assert_secret_absent "fixture-memory-key"
+}
+
+test_provider_setup_catalog_alias() {
+    begin "provider setup honors store-specific catalog aliases"
+    new_case setup-alias
+    seed_opencode_auth '{
+  "zai-coding-plan": {"type": "api", "key": "fixture-zai-coding-key"}
+}'
+    CREDENTIAL_ENV=ZHIPU_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --from opencode --credential zai-coding-plan --yes
+    assert_rc 0
+    assert_log_line "$ROOT/examples/providers/maki-zai-coding.yaml"
+    assert_log_line "maki-zai-coding"
+    assert_credential_env "fixture-zai-coding-key"
+    assert_secret_absent "fixture-zai-coding-key"
+    assert_out_has "[zai]"
+    assert_out_has 'plan = "coding"'
+}
+
+test_provider_setup_scanner_and_picker() {
+    begin "store scanner lists store, slug, and auth type without values"
+    new_case setup-scan
+    seed_maki_store opencode-go "fixture-maki-key"
+    seed_maki_plugin_store synthetic "fixture-plugin-key"
+    seed_opencode_auth '{
+  "deepseek": {"type": "api", "key": "fixture-deepseek-key"},
+  "openai": {"type": "oauth", "access": "fixture-oauth-access", "refresh": "fixture-oauth-refresh"}
+}'
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\n" provider setup --yes
+    assert_rc 0
+    assert_out_has "maki:opencode-go (api-key)"
+    assert_out_has "maki:synthetic (api-key)"
+    assert_out_has "opencode:deepseek (api-key)"
+    assert_out_has "opencode:openai (oauth)"
+    assert_log_line "maki-opencode-go"
+    assert_credential_env "fixture-maki-key"
+    assert_secret_absent "fixture-maki-key"
+    assert_secret_absent "fixture-plugin-key"
+    assert_secret_absent "fixture-deepseek-key"
+    assert_secret_absent "fixture-oauth-access"
+    assert_secret_absent "fixture-oauth-refresh"
+}
+
+test_provider_setup_oauth_refused() {
+    begin "OAuth store credentials are refused without gateway changes"
+    new_case setup-oauth
+    seed_maki_oauth openai
+    run_maki provider setup --from maki --credential openai --yes
+    if [ "$RC" -eq 0 ]; then
+        bad "OAuth credential should not be usable"
+    fi
+    assert_err_has "does not support"
+    assert_log_missing "profile"
+    assert_log_missing "create"
+    assert_log_missing "update"
+}
+
+test_provider_setup_oauth_interactive() {
+    begin "selecting an OAuth-listed credential exits non-zero"
+    new_case setup-oauth-pick
+    seed_opencode_auth '{
+  "openai": {"type": "oauth", "access": "fixture-pick-access", "refresh": "fixture-pick-refresh"}
+}'
+    run_maki_stdin "1" provider setup --yes
+    if [ "$RC" -eq 0 ]; then
+        bad "selecting an OAuth entry should exit non-zero"
+    fi
+    assert_err_has "does not support"
+    assert_log_missing "create"
+    assert_log_missing "update"
+    assert_secret_absent "fixture-pick-access"
+}
+
+test_provider_setup_non_tty_refusal() {
+    begin "non-TTY setup without flags makes no gateway calls"
+    new_case setup-notty
+    run_maki provider setup
+    assert_rc 1
+    assert_err_has "stdin is not a terminal"
+    if [ -s "$LOG" ]; then
+        bad "gateway was contacted: $(cat "$LOG")"
+    fi
+
+    # An existing provider without --yes also refuses before profile import.
+    seed_maki_store opencode-go "fixture-notty-key"
+    PROVIDER_NAMES=maki-opencode-go
+    reset_log
+    run_maki provider setup --from maki --credential opencode-go
+    assert_rc 1
+    assert_err_has "already exists"
+    assert_log_missing "lint"
+    assert_log_missing "import"
+    assert_log_missing "create"
+    assert_log_missing "update"
+}
+
+test_provider_setup_update() {
+    begin "existing provider is updated, not duplicated"
+    new_case setup-update
+    seed_maki_store opencode-go "fixture-update-key"
+    PROVIDER_NAMES=maki-opencode-go
+    PROFILE_NAMES=maki-opencode-go
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --from maki --credential opencode-go --yes
+    assert_rc 0
+    assert_log_has "update"
+    assert_log_line "maki-opencode-go"
+    assert_log_line "--from-existing"
+    assert_log_line_missing "create"
+    assert_log_missing "import"
+    assert_out_has "already imported"
+    assert_out_has "updated"
+    assert_credential_env "fixture-update-key"
+    assert_secret_absent "fixture-update-key"
+}
+
+test_provider_setup_attach() {
+    begin "provider setup attaches to the project sandbox with --wait"
+    new_case setup-attach
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_maki_store opencode-go "fixture-attach-key"
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --from maki --credential opencode-go --yes --attach
+    assert_rc 0
+    assert_log_has "attach"
+    assert_log_line "maki-myproject"
+    assert_log_line "--wait"
+    assert_out_has "attached"
+    assert_secret_absent "fixture-attach-key"
+}
+
+test_provider_setup_file_source() {
+    begin "generic JSON file source reads the given field"
+    new_case setup-file
+    write_fixture_profile "$CASE/fixture-profile.yaml" fixture-provider FIXTURE_KEY
+    printf '{"custom_key": "fixture-file-value"}\n' >"$CASE/creds.json"
+    CREDENTIAL_ENV=FIXTURE_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --file "$CASE/creds.json" --field custom_key \
+        --profile "$CASE/fixture-profile.yaml" --yes
+    assert_rc 0
+    assert_log_line "$CASE/fixture-profile.yaml"
+    assert_log_line "fixture-provider"
+    assert_log_line "--type"
+    assert_credential_env "fixture-file-value"
+    assert_secret_absent "fixture-file-value"
+}
+
+test_provider_setup_env_source() {
+    begin "environment variable source is used without stdin"
+    new_case setup-env
+    write_fixture_profile "$CASE/fixture-profile.yaml" fixture-provider FIXTURE_KEY
+    CREDENTIAL_ENV=FIXTURE_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+    TEST_ENV_VALUE=fixture-env-value
+
+    run_maki provider setup --env MAKI_OSS_TEST_ENV_VALUE \
+        --profile "$CASE/fixture-profile.yaml" --yes
+    assert_rc 0
+    assert_credential_env "fixture-env-value"
+    assert_secret_absent "fixture-env-value"
+}
+
+test_provider_setup_hidden_prompt() {
+    begin "hidden prompt source reads a value without echoing it"
+    new_case setup-prompt
+    write_fixture_profile "$CASE/fixture-profile.yaml" fixture-provider FIXTURE_KEY
+    CREDENTIAL_ENV=FIXTURE_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "g\n3\nfixture-prompt-value\n" provider setup \
+        --profile "$CASE/fixture-profile.yaml" --yes
+    assert_rc 0
+    assert_out_has "No stored credentials detected."
+    assert_credential_env "fixture-prompt-value"
+    assert_secret_absent "fixture-prompt-value"
+}
+
+test_provider_setup_custom_generation() {
+    begin "unknown store slug generates, lints, and imports a custom profile"
+    new_case setup-custom
+    seed_maki_store nano-gpt "fixture-nano-key"
+    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\n\n\napi.nano-gpt.test\n/v1\n" provider setup --yes
+    assert_rc 0
+    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
+    if [ ! -f "$generated" ]; then
+        bad "generated profile not found: $generated"
+    else
+        grep -Fq "id: maki-nano-gpt" "$generated" || bad "generated profile id missing"
+        grep -Fq "env_vars: [NANO_GPT_API_KEY]" "$generated" || bad "generated profile env var missing"
+        grep -Fq "host: api.nano-gpt.test" "$generated" || bad "generated profile host missing"
+        grep -Fq "path: /v1" "$generated" || bad "generated profile path missing"
+        if grep -Fq "fixture-nano-key" "$generated"; then
+            bad "generated profile contains the credential value"
+        fi
+    fi
+    assert_log_line "$generated"
+    assert_log_before "lint" "import"
+    assert_log_line "maki-nano-gpt"
+    assert_credential_env "fixture-nano-key"
+    assert_secret_absent "fixture-nano-key"
+}
+
+test_provider_setup_custom_preserved() {
+    begin "declining overwrite preserves the generated profile"
+    new_case setup-custom-keep
+    mkdir -p "$XDG_CONFIG_HOME/maki-openshell/profiles"
+    keep=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
+    write_fixture_profile "$keep" maki-nano-gpt NANO_GPT_API_KEY
+    seed_maki_store nano-gpt "fixture-keep-key"
+    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\n\n\nnew.example.com\n\nn\n" provider setup
+    assert_rc 0
+    assert_out_has "Keeping existing profile"
+    if ! grep -Fq "host: api.fixture.test" "$keep"; then
+        bad "existing generated profile was overwritten"
+    fi
+    if grep -Fq "new.example.com" "$keep"; then
+        bad "declined custom details leaked into the existing profile"
+    fi
+    assert_log_line "$keep"
+    assert_credential_env "fixture-keep-key"
+    assert_secret_absent "fixture-keep-key"
+}
+
+test_provider_setup_lint_failure() {
+    begin "profile lint failure aborts before import"
+    new_case setup-lint-fail
+    seed_maki_store opencode-go "fixture-lint-key"
+    PROFILE_LINT_EXIT=1
+
+    run_maki provider setup --from maki --credential opencode-go --yes
+    assert_rc 3
+    assert_log_has "lint"
+    assert_log_missing "import"
+    assert_log_missing "create"
+    assert_log_missing "update"
+    assert_secret_absent "fixture-lint-key"
+}
+
+test_provider_setup_credential_non_exposure() {
+    begin "credential values never reach argv, output, or generated files"
+    new_case setup-no-leak
+    value='fixture-do-not-leak-9f3a'
+    seed_maki_store nano-gpt "$value"
+    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\n\n\napi.nano-gpt.test\n/v1\n" provider setup --yes
+    assert_rc 0
+    assert_credential_env "$value"
+    assert_secret_absent "$value"
+    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
+    if [ -f "$generated" ] && grep -Fq -- "$value" "$generated"; then
+        bad "generated profile contains the credential value"
+    fi
+}
+
+test_provider_setup_usage_errors() {
+    begin "provider setup rejects bad flags before touching the gateway"
+    new_case setup-usage
+    run_maki provider setup --from bogus --credential x --yes
+    assert_rc 1
+    assert_err_has "maki or opencode"
+    run_maki provider setup --file "$CASE/missing.json" --yes
+    assert_rc 1
+    if [ -s "$LOG" ]; then
+        bad "gateway was contacted for invalid input: $(cat "$LOG")"
+    fi
+}
+
+test_provider_setup_custom_validation() {
+    begin "custom setup rejects invalid ids and hosts"
+    new_case setup-custom-invalid
+    seed_maki_store nano-gpt "fixture-invalid-key"
+    CREDENTIAL_ENV=GOOD_PROVIDER_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\nBad ID\ngood-provider\n\nbad host\napi.good.test\n\n" provider setup --yes
+    assert_rc 0
+    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/good-provider.yaml
+    if [ ! -f "$generated" ]; then
+        bad "valid custom profile was not generated after invalid input"
+    else
+        grep -Fq "id: good-provider" "$generated" || bad "custom id not applied"
+        grep -Fq "env_vars: [GOOD_PROVIDER_API_KEY]" "$generated" || bad "custom env var not applied"
+        grep -Fq "host: api.good.test" "$generated" || bad "custom host not applied"
+    fi
+    assert_credential_env "fixture-invalid-key"
+    assert_secret_absent "fixture-invalid-key"
+}
+
+test_provider_setup_no_jq() {
+    begin "provider setup reads single-level stores without jq"
+    new_case setup-no-jq
+    seed_maki_store opencode-go "fixture-no-jq-key"
+    PATH_OVERRIDE=$(no_jq_path)
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki provider setup --from maki --credential opencode-go --yes
+    assert_rc 0
+    assert_err_has "jq not found"
+    assert_credential_env "fixture-no-jq-key"
+    assert_secret_absent "fixture-no-jq-key"
+}
+test_run_model_flag() {
+    begin "run --model passes the model to Maki"
+    new_case run-model
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki run --model opencode-go/deepseek-v4.1-flash "check"
+    assert_rc 0
+    assert_log_has "exec"
+    assert_log_line "--model"
+    assert_log_line "opencode-go/deepseek-v4.1-flash"
+    assert_log_line "check"
+}
+
+test_session_creates_uploads_and_syncs() {
+    begin "bare maki-oss creates, uploads, runs, and syncs back in order"
+    new_case session-create
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_remembered_provider maki-stub
+
+    run_maki
+    assert_rc 0
+    assert_log_has "create"
+    assert_log_has "upload"
+    assert_log_has "exec"
+    assert_log_line "--tty"
+    assert_log_has "download"
+    assert_log_before "create" "upload"
+    assert_log_before "upload" "exec"
+    assert_log_before "exec" "download"
+    if [ ! -e "$STUB_STATE_DIR/sandboxes/maki-myproject" ]; then
+        bad "sandbox was not created"
+    fi
+    assert_log_missing "driver-config-json"
+}
+
+test_session_reuses_without_upload() {
+    begin "existing sandbox is reused and nothing is uploaded"
+    new_case session-reuse
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki
+    assert_rc 0
+    assert_err_has "Reusing sandbox"
+    assert_log_missing "create"
+    assert_log_missing "upload"
+    assert_log_has "exec"
+    assert_log_has "download"
+}
+
+test_session_starts_stopped_sandbox() {
+    begin "stopped sandbox is started instead of recreated"
+    new_case session-stopped
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Stopped
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki
+    assert_rc 0
+    assert_log_has "start"
+    assert_log_missing "create"
+    assert_log_missing "upload"
+    assert_log_has "exec"
+}
+
+test_session_attaches_missing_provider() {
+    begin "missing remembered provider is attached with --wait before exec"
+    new_case session-attach
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+
+    run_maki
+    assert_rc 0
+    assert_log_has "attach"
+    assert_log_line "--wait"
+    assert_log_before "attach" "exec"
+    assert_log_missing "create"
+    assert_log_missing "upload"
+}
+
+test_session_inline_bootstrap() {
+    begin "no provider on a TTY bootstraps through the wizard and continues"
+    new_case session-bootstrap
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_maki_store opencode-go "fixture-bootstrap-key"
+    CREDENTIAL_ENV=OPENCODE_API_KEY
+    CREDENTIAL_LOG=$CASE/credential-env.log
+
+    run_maki_stdin "1\n"
+    assert_rc 0
+    assert_out_has "No provider is configured yet"
+    assert_out_has "Provider 'maki-opencode-go' created."
+    assert_log_has "exec"
+    assert_log_line "--tty"
+    assert_log_has "download"
+    grep -Fq 'providers = "maki-opencode-go"' "$XDG_CONFIG_HOME/maki-openshell/config.toml" \
+        || bad "bootstrap did not remember the provider"
+    if [ ! -e "$STUB_STATE_DIR/sandboxes/maki-myproject" ]; then
+        bad "sandbox was not created after the bootstrap"
+    fi
+    assert_secret_absent "fixture-bootstrap-key"
+}
+
+test_session_no_provider_non_tty() {
+    begin "no provider refuses before any gateway mutation"
+    new_case session-noprov
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+
+    run_maki
+    assert_rc 1
+    assert_err_has "provider setup"
+    if [ -s "$LOG" ]; then
+        bad "gateway was contacted: $(cat "$LOG")"
+    fi
+}
+
+test_session_unknown_gateway_provider() {
+    begin "remembered provider missing from the gateway fails before create"
+    new_case session-missing-provider
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-openshell"
+    printf 'providers = "maki-ghost"\n' >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+
+    run_maki
+    assert_rc 1
+    assert_err_has "maki-ghost"
+    assert_err_has "provider setup"
+    assert_log_missing "create"
+    assert_log_missing "exec"
+}
+
+test_run_bootstraps_from_scratch() {
+    begin "run ensures and bootstraps a fresh project with stdout left clean"
+    new_case run-scratch
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_remembered_provider maki-stub
+    EXEC_STDOUT='{"result":"stub-ok"}'
+
+    run_maki run "hello"
+    assert_rc 0
+    assert_out_has '{"result":"stub-ok"}'
+    assert_out_missing "Creating sandbox"
+    assert_out_missing "Uploading the project"
+    assert_out_missing "Synced sandbox changes"
+    assert_err_has "Creating sandbox"
+    assert_log_has "create"
+    assert_log_has "upload"
+    assert_log_has "exec"
+    assert_log_has "download"
+    assert_log_before "create" "upload"
+    assert_log_before "upload" "exec"
+}
+
+test_session_model_precedence() {
+    begin "config model is used unless --model overrides it"
+    new_case session-model
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    attach_stub_provider maki-myproject maki-stub
+    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
+    printf 'providers = "maki-stub"\nmodel = "config/model"\n' \
+        >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    printf 'maki-stub\n' >>"$STUB_STATE_DIR/providers.list"
+
+    run_maki run "one"
+    assert_rc 0
+    assert_log_line "config/model"
+
+    reset_log
+    run_maki run --model flag/model "two"
+    assert_rc 0
+    assert_log_line "flag/model"
+    assert_log_line_missing "config/model"
+}
+
+test_session_no_sync() {
+    begin "--no-sync skips the download and prints the manual hint"
+    new_case session-nosync
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki --no-sync maki
+    assert_rc 0
+    assert_log_missing "download"
+    assert_err_has "--no-sync"
+}
+
+test_session_sync_failure_preserves_code() {
+    begin "sync failure warns and keeps Maki's exit code"
+    new_case session-sync-fail
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    EXEC_STDOUT='partial-output'
+    EXEC_EXIT=7
+    DOWNLOAD_EXIT=9
+
+    run_maki run "boom"
+    assert_rc 7
+    assert_out_has "partial-output"
+    assert_err_has "download failed"
+}
+
+test_session_sync_merge() {
+    begin "sync overwrites matching files and preserves host-only files"
+    new_case session-sync-merge
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    download_fixture=$CASE/download-fixture
+    mkdir -p "$download_fixture"
+    printf 'sandbox-version\n' >"$download_fixture/readme.txt"
+    printf 'new-file\n' >"$download_fixture/new.txt"
+    printf 'host-version\n' >"$RUN_DIR/readme.txt"
+    printf 'host-only\n' >"$RUN_DIR/hostonly.txt"
+    DOWNLOAD_FIXTURE=$download_fixture
+
+    run_maki maki
+    assert_rc 0
+    grep -Fq 'sandbox-version' "$RUN_DIR/readme.txt" \
+        || bad "matching file was not overwritten by the sync"
+    grep -Fq 'new-file' "$RUN_DIR/new.txt" 2>/dev/null \
+        || bad "new sandbox file was not downloaded"
+    grep -Fq 'host-only' "$RUN_DIR/hostonly.txt" 2>/dev/null \
+        || bad "host-only file was removed by the sync"
+}
+
 test_no_jq_fallback() {
     begin "sandbox parsing works without jq"
     new_case no-jq
     RUN_DIR=$CASE/project/myproject
     mkdir -p "$RUN_DIR"
-    PATH_OVERRIDE="$STUB_DIR:/usr/bin:/bin"
+    PATH_OVERRIDE=$(no_jq_path)
 
     run_maki up
     assert_rc 0
@@ -682,6 +1467,18 @@ test_fish_completions() {
     assert_rc 0
     assert_fish_out_has "--name"
     assert_fish_out_has "--yes"
+    assert_fish_out_has "--model"
+    assert_fish_out_has "--no-sync"
+
+    run_fish "complete -C 'maki-oss provider '"
+    assert_rc 0
+    assert_fish_out_has "setup"
+
+    run_fish "complete -C 'maki-oss provider setup --'"
+    assert_rc 0
+    assert_fish_out_has "--from"
+    assert_fish_out_has "--credential"
+    assert_fish_out_has "--profile"
 }
 
 test_example_config() {
@@ -723,6 +1520,38 @@ run_test test_start_stop
 run_test test_policy_wrappers
 run_test test_provider_wrappers
 run_test test_provider_inline_secret_rejected
+run_test test_provider_setup_curated
+run_test test_provider_memory
+run_test test_provider_setup_catalog_alias
+run_test test_provider_setup_scanner_and_picker
+run_test test_provider_setup_oauth_refused
+run_test test_provider_setup_oauth_interactive
+run_test test_provider_setup_non_tty_refusal
+run_test test_provider_setup_update
+run_test test_provider_setup_attach
+run_test test_provider_setup_file_source
+run_test test_provider_setup_env_source
+run_test test_provider_setup_hidden_prompt
+run_test test_provider_setup_custom_generation
+run_test test_provider_setup_custom_preserved
+run_test test_provider_setup_lint_failure
+run_test test_provider_setup_credential_non_exposure
+run_test test_provider_setup_usage_errors
+run_test test_provider_setup_custom_validation
+run_test test_provider_setup_no_jq
+run_test test_run_model_flag
+run_test test_session_creates_uploads_and_syncs
+run_test test_session_reuses_without_upload
+run_test test_session_starts_stopped_sandbox
+run_test test_session_attaches_missing_provider
+run_test test_session_inline_bootstrap
+run_test test_session_no_provider_non_tty
+run_test test_session_unknown_gateway_provider
+run_test test_run_bootstraps_from_scratch
+run_test test_session_model_precedence
+run_test test_session_no_sync
+run_test test_session_sync_failure_preserves_code
+run_test test_session_sync_merge
 run_test test_no_jq_fallback
 run_test test_missing_policy_dependency
 run_test test_fish_plugin

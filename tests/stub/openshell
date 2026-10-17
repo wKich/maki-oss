@@ -13,6 +13,15 @@
 #   STUB_EXEC_EXIT        exit code for `sandbox exec` (default: 0)
 #   STUB_GATEWAY_DOWN     "1" makes every command fail as if unreachable
 #   STUB_PROVIDER_NAMES   newline-separated names for `provider list`
+#   STUB_PROFILE_NAMES    newline-separated ids for `profile list`
+#   STUB_PROFILE_LINT_EXIT  exit code for `profile lint` (default: 0)
+#   STUB_CREDENTIAL_ENV   env var whose value is appended to STUB_ENV_LOG on
+#                         `provider create|update` (default: none)
+#   STUB_ENV_LOG          file receiving recorded credential env values
+#   STUB_DOWNLOAD_EXIT    exit code for `sandbox download` (default: 0)
+#   STUB_DOWNLOAD_FIXTURE host directory whose contents are copied into the
+#                         `sandbox download` destination, simulating files
+#                         changed inside the sandbox
 
 set -eu
 
@@ -35,6 +44,22 @@ sandboxes=$state/sandboxes
 providers=$state/providers
 nl='
 '
+
+# Appends a provider name to the simulated gateway provider list.
+stub_record_provider() {
+    if [ -n "$state" ] && [ -n "$1" ]; then
+        mkdir -p "$state"
+        printf '%s\n' "$1" >> "$state/providers.list"
+    fi
+}
+
+# Records the configured credential env var's value so tests can assert that
+# the value travelled in the child environment (it never appears in argv).
+stub_record_credential() {
+    if [ -n "${STUB_CREDENTIAL_ENV:-}" ] && [ -n "${STUB_ENV_LOG:-}" ]; then
+        printf '%s\n' "$(printenv "$STUB_CREDENTIAL_ENV" 2>/dev/null || true)" >> "$STUB_ENV_LOG"
+    fi
+}
 
 if [ "${1:-}" = "-g" ] || [ "${1:-}" = "--gateway" ]; then
     shift
@@ -136,8 +161,23 @@ case $command_name in
                 printf '%s\n' "${STUB_EXEC_STDOUT:-stub-exec-output}"
                 exit "${STUB_EXEC_EXIT:-0}"
                 ;;
-            upload|download)
-                printf 'stub: %s ok\n' "$action"
+            upload)
+                printf 'stub: upload ok\n'
+                ;;
+            download)
+                if [ "${STUB_DOWNLOAD_EXIT:-0}" -ne 0 ]; then
+                    printf 'stub: download failed\n' >&2
+                    exit "${STUB_DOWNLOAD_EXIT}"
+                fi
+                if [ -n "${STUB_DOWNLOAD_FIXTURE:-}" ]; then
+                    # Args after the action: NAME SOURCE DEST.
+                    stub_download_dest=${3:-}
+                    if [ -n "$stub_download_dest" ]; then
+                        mkdir -p "$stub_download_dest"
+                        cp -R "$STUB_DOWNLOAD_FIXTURE"/. "$stub_download_dest"/
+                    fi
+                fi
+                printf 'stub: download ok\n'
                 ;;
             provider)
                 provider_action=${1:-}
@@ -199,15 +239,112 @@ case $command_name in
         case $action in
             list)
                 provider_names=${STUB_PROVIDER_NAMES:-}
+                if [ -n "$state" ] && [ -f "$state/providers.list" ]; then
+                    provider_names=$(printf '%s\n%s' "$provider_names" "$(cat "$state/providers.list")")
+                fi
                 if [ "${1:-}" = "--names" ]; then
                     printf '%s\n' "$provider_names" | grep -v '^$' || true
                 else
                     printf 'NAME\n%s\n' "$provider_names"
                 fi
                 ;;
-            create) : ;;
+            create)
+                provider_name=
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        --name)
+                            provider_name=${2:-}
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                stub_record_provider "$provider_name"
+                stub_record_credential
+                printf 'stub: created provider %s\n' "$provider_name"
+                ;;
+            update)
+                stub_record_provider "${1:-}"
+                stub_record_credential
+                printf 'stub: updated provider %s\n' "${1:-}"
+                ;;
             *)
                 printf 'stub: unsupported provider action: %s\n' "$action" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    profile)
+        action=${1:-}
+        if [ "$#" -gt 0 ]; then
+            shift
+        fi
+        case $action in
+            lint)
+                if [ "${STUB_PROFILE_LINT_EXIT:-0}" -ne 0 ]; then
+                    printf 'stub: profile lint failed\n' >&2
+                    exit "${STUB_PROFILE_LINT_EXIT}"
+                fi
+                printf 'Provider profile lint passed.\n'
+                ;;
+            import)
+                profile_file=
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        -f|--file)
+                            profile_file=${2:-}
+                            shift
+                            ;;
+                    esac
+                    shift
+                done
+                if [ -n "$state" ] && [ -n "$profile_file" ] && [ -f "$profile_file" ]; then
+                    profile_id=$(sed -n 's/^id:[[:space:]]*//p' "$profile_file" | head -n 1)
+                    if [ -n "$profile_id" ]; then
+                        mkdir -p "$state/profiles"
+                        printf '%s\n' "$profile_id" >> "$state/profiles/imported"
+                    fi
+                fi
+                printf 'Imported 1 provider profile.\n'
+                ;;
+            list)
+                stub_output=table
+                while [ "$#" -gt 0 ]; do
+                    case $1 in
+                        -o|--output)
+                            stub_output=${2:-table}
+                            shift
+                            ;;
+                        --output=*)
+                            stub_output=${1#--output=}
+                            ;;
+                    esac
+                    shift
+                done
+                stub_profiles=${STUB_PROFILE_NAMES:-}
+                if [ -n "$state" ] && [ -f "$state/profiles/imported" ]; then
+                    stub_profiles=$(printf '%s\n%s' "$stub_profiles" "$(cat "$state/profiles/imported")")
+                fi
+                if [ "$stub_output" = json ]; then
+                    printf '['
+                    stub_first=1
+                    printf '%s\n' "$stub_profiles" | while IFS= read -r stub_profile; do
+                        if [ -z "$stub_profile" ]; then
+                            continue
+                        fi
+                        if [ "$stub_first" -eq 0 ]; then
+                            printf ','
+                        fi
+                        stub_first=0
+                        printf '\n  {"id": "%s", "type": "provider", "scope": "global"}' "$stub_profile"
+                    done
+                    printf '\n]\n'
+                else
+                    printf 'NAME\n%s\n' "$stub_profiles"
+                fi
+                ;;
+            *)
+                printf 'stub: unsupported profile action: %s\n' "$action" >&2
                 exit 1
                 ;;
         esac

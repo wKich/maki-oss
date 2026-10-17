@@ -8,24 +8,44 @@ that OpenShell's proxy resolves only at approved endpoints.
 
 ## Status
 
-All three changes are implemented and verified — evidence in
+All five changes are implemented and verified — evidence in
 [`docs/verification-log.md`](docs/verification-log.md) and
 [`dashboard/README.md`](dashboard/README.md). OpenSpec plans live under
 [`openspec/`](openspec/); accepted plans are archived under
 `openspec/changes/archive/`.
 
-The three changes:
+The five changes:
 
 | Change | Delivers |
 |---|---|
 | `add-maki-openshell-setup-guide` | Canonical setup guide, glossary, verifiable examples, AI-agent reference pack |
 | `add-maki-openshell-fish-helper` | `maki-oss` helper CLI (POSIX sh) + fisher-compatible fish plugin |
 | `add-openshell-bun-dashboard` | Minimal Bun web dashboard to monitor and manage OpenShell |
+| `add-any-provider-support` | `provider setup` wizard, curated profile catalog, credential-store migration guide |
+| `add-one-command-session` | Bare `maki-oss` session: ensure sandbox, upload on create, sync back on exit, provider/model memory |
+
+## Quick start
+
+```sh
+maki-oss provider setup        # once per machine: wizard for any provider
+cd ~/code/myproject
+maki-oss                       # ensure the sandbox, run Maki, sync back
+```
+
+Bare `maki-oss` creates or reuses the project's sandbox, uploads the project
+when the sandbox is first created, attaches remembered providers, launches
+Maki, and downloads changes back into the project directory on exit.
+`maki-oss run "<prompt>"` is the headless variant of the same flow. See
+[`docs/helper.md`](docs/helper.md) for the full reference.
 
 ## Guides
 
 - [`docs/setup-guide.md`](docs/setup-guide.md) — clean machine to a running
   sandboxed Maki, step by step.
+- [`docs/providers.md`](docs/providers.md) — any-provider catalog, the
+  `provider setup` wizard, and custom profiles.
+- [`docs/migrating-providers.md`](docs/migrating-providers.md) — move keys out
+  of Maki and OpenCode stores, and the OAuth limitation.
 - [`docs/verification.md`](docs/verification.md) — isolation checklist with
   exact commands and expected output.
 - [`docs/glossary.md`](docs/glossary.md) — shared vocabulary for these docs.

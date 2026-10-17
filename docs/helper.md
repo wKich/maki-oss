@@ -5,6 +5,12 @@ creates one sandbox per project, moves files in and out without bind mounts,
 runs Maki headless or interactively, and encodes the safety rules from the
 [setup guide](setup-guide.md) so they are not retyped per project.
 
+Bare `maki-oss` (no subcommand) is the one-command session: it ensures the
+project sandbox, uploads the project when the sandbox is first created,
+launches Maki, and downloads changes back into the project directory on exit.
+After a one-time `maki-oss provider setup`, a project needs no further setup
+commands.
+
 The sandbox remains the security boundary:
 
 - no host bind mounts — project files move with `openshell sandbox upload` /
@@ -72,13 +78,18 @@ strings; `providers` is a comma-separated list.
 | `engine` | `MAKI_OSS_ENGINE` | `docker` | `docker` or `podman` |
 | `gateway` | `MAKI_OSS_GATEWAY` | empty | OpenShell gateway name (`-g`) |
 | `workdir` | `MAKI_OSS_WORKDIR` | `/sandbox/project` | In-sandbox project directory used by `upload`, `download`, `maki`, and `run` |
+| `model` | `MAKI_OSS_MODEL` | empty | Default model passed to Maki (`provider/model`); `--model` overrides it |
 
 `MAKI_VERSION` (or `--maki-version`) sets the Maki release version passed to
 `image build`; when unset, the Dockerfile default applies.
 
 Exit codes: `0` success, `1` usage error, `2` missing local dependency
-(CLI, engine, image, policy), `3` gateway or sandbox operation failed.
-`run` and `maki` propagate the remote process exit code instead.
+(CLI, engine, image, policy, profile file), `3` gateway or sandbox operation
+failed (including a failing `profile lint`). `provider setup` exits `1` when
+input or flags are missing, `2` when a named profile file is absent, and `3`
+when a gateway operation fails. `run` and `maki` propagate the remote process
+exit code instead; a failed session sync warns on stderr without changing that
+exit code.
 
 ## Command reference
 
@@ -110,29 +121,50 @@ maki-oss image build --engine podman
 Creates the project's sandbox when it does not exist, or starts it when it is
 stopped. Running `up` twice never creates a second sandbox. The sandbox is
 created detached, from the configured image, policy, providers, CPU, and
-memory.
+memory. `up` is lifecycle-only: it never uploads the project or launches Maki
+(the session commands do that).
 
 ```sh
 maki-oss up
 maki-oss up --name maki-other-project
 ```
 
-### maki
+### maki (and bare `maki-oss`)
 
-Attaches an interactive Maki session in the sandbox workdir through
-`openshell sandbox exec --tty`.
+Ensures the project sandbox and attaches an interactive Maki session in the
+sandbox workdir through `openshell sandbox exec --tty`. Running `maki-oss`
+with no subcommand is the same command. The ensure step:
+
+1. refuses to start when no provider is remembered — on a TTY it offers the
+   provider setup wizard inline, and continues the session afterwards;
+2. creates the sandbox when absent (uploading the project once) or starts a
+   stopped one, never creating a second sandbox;
+3. attaches any remembered provider that is not attached yet.
+
+When the session ends — including Ctrl-C or a non-zero exit — the helper
+downloads the sandbox workdir back into the project directory. The download
+merges: matching files are overwritten and host-only files are never deleted.
+`--no-sync` skips it. `--model provider/model` (or the config `model` key)
+selects the model.
 
 ```sh
-maki-oss maki
+cd ~/code/myproject
+maki-oss            # ensure + interactive Maki + sync back
+maki-oss --no-sync  # leave changes in the sandbox only
 ```
 
 ### run
 
 Runs Maki headless with `--print --yolo --trust --output-format json`,
-streams stdout unchanged, and exits with Maki's exit code.
+streams stdout unchanged, and exits with Maki's exit code. Like `maki`, it
+ensures the sandbox first and syncs back on exit; helper messages go to stderr
+so stdout carries only Maki's output. `--model <provider/model>` is passed
+through as Maki's `--model` and overrides the config `model` key, so any
+credentialed provider can be selected without touching the interactive picker.
 
 ```sh
 maki-oss run "fix the failing tests"
+maki-oss run --model deepseek/deepseek-chat "check the changelog"
 ```
 
 ### upload / download
@@ -210,6 +242,43 @@ maki-oss provider attach maki-anthropic
 maki-oss provider list
 ```
 
+### provider setup
+
+The wizard for any provider. It scans the Maki
+(`~/.local/state/maki/auth`) and OpenCode (`~/.local/share/opencode/auth.json`)
+credential stores, or reads a JSON file, a host environment variable, or a
+hidden prompt, then resolves a profile — curated catalog, `--profile FILE`, or
+interactive custom generation into
+`${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/profiles/`. Every profile is
+linted before `profile import --global`, and the provider is created when
+absent or updated with `provider update --from-existing` when present.
+Attachment (`sandbox provider attach --wait`) is offered at the end, or forced
+with `--attach`.
+
+Credential values move only through the child-process environment: never argv,
+never output, never generated files, never the shell history. A successful
+setup (and `maki-oss provider add`) records the provider instance name in the
+config `providers` list, so the session commands attach it automatically; the
+interactive wizard also offers to set the default `model`.
+
+```sh
+maki-oss provider setup
+maki-oss provider setup --from maki --credential opencode-go --yes
+maki-oss provider setup --file ~/creds.json --field api_key \
+    --profile examples/providers/maki-deepseek.yaml --yes
+maki-oss provider setup --env DEEPSEEK_API_KEY \
+    --profile examples/providers/maki-deepseek.yaml --yes
+```
+
+Flags: `--from maki|opencode`, `--credential SLUG`, `--file PATH`,
+`--field PATH`, `--env VAR`, `--profile FILE`, `--name NAME`, `--yes`,
+`--attach` / `--no-attach`. OAuth store entries are listed as `(oauth)` and
+refused with guidance. Without the flags needed to complete the flow on a
+non-TTY stdin, the command exits non-zero before any gateway mutation, like
+`rm`. `MAKI_OSS_INTERACTIVE=1` treats piped stdin as interactive so scripted
+runs (and the test suite) can answer the prompts. The curated catalog and
+troubleshooting live in [`docs/providers.md`](providers.md).
+
 ### fish install / uninstall
 
 Installs the fish plugin without fisher by symlinking
@@ -229,33 +298,37 @@ maki-oss fish uninstall
 maki-oss help
 ```
 
-## Cookbook: create, run, collect, clean
+## Cookbook: two commands per project
 
 ```sh
-cd ~/code/myproject
-
-# 1. One-time prerequisites.
+# One-time machine setup (any provider, including keys already stored by
+# Maki or OpenCode).
 maki-oss doctor
 maki-oss image build
-ANTHROPIC_API_KEY=... maki-oss provider add maki-anthropic \
-    --type maki-anthropic --from-existing
+maki-oss provider setup          # wizard; remembers the provider
 
-# 2. Create the sandbox and attach the provider.
-maki-oss up --provider maki-anthropic
-
-# 3. Move the project in and run Maki headless.
-maki-oss upload .
+# Every project, afterwards:
+cd ~/code/myproject
+maki-oss                         # ensure sandbox, upload on first run,
+                                 # launch Maki, sync changes back on exit
 maki-oss run "explain this project and fix the failing tests"
-
-# 4. Collect results (paths must stay under /sandbox).
-maki-oss download /sandbox/project ./project-out
-
-# 5. Clean up.
-maki-oss rm --yes
 ```
 
-Alternatively set `providers = "maki-anthropic"` in the config file and drop
-`--provider` from `up`.
+The session commands ensure the sandbox themselves: create when absent
+(uploading the project once), start when stopped, attach remembered providers.
+`maki-oss run` is the headless variant of the same flow. The first bare run
+in a project with no remembered provider offers the setup wizard inline (or
+exits with the exact command when stdin is not a TTY).
+
+Explicit control is still available when you want it:
+
+```sh
+maki-oss up                      # create/start only
+maki-oss upload .                # manual upload
+maki-oss download /sandbox/project ./project-out
+maki-oss status
+maki-oss rm --yes
+```
 
 ## Fish setup
 
@@ -284,6 +357,10 @@ step above) or set `MAKI_OSS_BIN=/path/to/repo/bin/maki-oss`.
 | `openshell CLI not found on PATH` | Install OpenShell; see the [setup guide](setup-guide.md) |
 | `gateway: unreachable` | Start the gateway service, then rerun `maki-oss doctor` |
 | `refusing --env ANTHROPIC_API_KEY` | Use `provider add --from-existing` and `provider attach`, or `--allow-env KEY` for genuinely non-secret values |
+| `no '<slug>' credential in the maki store` | Store slug differs from the provider name | Run `maki-oss provider setup` to list the detected slugs |
+| `credential '<store>:<slug>' is 'oauth'` | OAuth login selected | Use an API-key credential; see [`docs/migrating-providers.md`](migrating-providers.md) |
+| `provider '<name>' already exists; pass --yes` | Non-TTY update needs confirmation | Rerun with `--yes` to update the provider |
+| `no curated profile matches` on a non-TTY | Custom generation needs prompts | Pass `--profile FILE`, or rerun interactively |
 | `policy file not found` | Point `--policy` / the config at an existing YAML file |
 | `sandbox '<name>' not found` | Run `maki-oss up` first |
 | `image ... not found` | Run `maki-oss image build` |

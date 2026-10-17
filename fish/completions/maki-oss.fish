@@ -7,7 +7,7 @@ complete -c maki-oss -n __fish_use_subcommand -a doctor -d 'Check prerequisites'
 complete -c maki-oss -n __fish_use_subcommand -a image -d 'Build the sandbox image'
 complete -c maki-oss -n __fish_use_subcommand -a init -d 'Create or start the sandbox'
 complete -c maki-oss -n __fish_use_subcommand -a up -d 'Create or start the sandbox'
-complete -c maki-oss -n __fish_use_subcommand -a maki -d 'Attach an interactive Maki session'
+complete -c maki-oss -n __fish_use_subcommand -a maki -d 'Ensure the sandbox and attach Maki'
 complete -c maki-oss -n __fish_use_subcommand -a run -d 'Run Maki headless'
 complete -c maki-oss -n __fish_use_subcommand -a upload -d 'Copy local files into the sandbox'
 complete -c maki-oss -n __fish_use_subcommand -a download -d 'Copy files out of the sandbox'
@@ -30,6 +30,7 @@ complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a apply -d 'Apply 
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a add -d 'Create a provider'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a attach -d 'Attach a provider to the sandbox'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a list -d 'List providers on the gateway'
+complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a setup -d 'Set up a provider from a stored credential'
 complete -c maki-oss -n '__fish_seen_subcommand_from fish' -a install -d 'Install the fish plugin'
 complete -c maki-oss -n '__fish_seen_subcommand_from fish' -a uninstall -d 'Remove the fish plugin'
 
@@ -43,7 +44,7 @@ complete -c maki-oss -l memory -r -d 'Memory limit (for example 4Gi)'
 complete -c maki-oss -l engine -r -a 'docker podman' -d 'Container engine'
 complete -c maki-oss -l gateway -r -d 'OpenShell gateway name'
 complete -c maki-oss -l workdir -r -d 'In-sandbox project directory'
-complete -c maki-oss -l env -r -d 'Non-secret environment variable (KEY=VALUE)'
+complete -c maki-oss -l env -r -d 'Non-secret KEY=VALUE, or host var for setup'
 complete -c maki-oss -l allow-env -r -d 'Allow a credential-like --env key'
 complete -c maki-oss -l yes -d 'Skip the confirmation prompt'
 
@@ -61,12 +62,24 @@ complete -c maki-oss -l global -d 'Use the gateway-global policy'
 complete -c maki-oss -l wait -d 'Wait for the change to apply'
 
 # provider options.
-complete -c maki-oss -l type -r -a 'maki-anthropic maki-openrouter' -d 'Provider profile type'
-complete -c maki-oss -l credential -r -d 'Credential key read from the environment'
+complete -c maki-oss -l type -r -a 'maki-anthropic maki-openrouter maki-deepseek maki-synthetic maki-openai maki-google maki-mistral maki-xai maki-zai maki-zai-coding maki-opencode maki-opencode-go' -d 'Provider profile type'
+complete -c maki-oss -l credential -r -d 'Credential key (add) or store slug (setup)'
 complete -c maki-oss -l config -r -d 'Provider config KEY=VALUE'
 complete -c maki-oss -l from-existing -d 'Read credentials from existing local state'
 complete -c maki-oss -l runtime-credentials -d 'Resolve credentials at runtime'
 complete -c maki-oss -l global-profile -d 'Use a platform-scoped profile'
+
+# provider setup options.
+complete -c maki-oss -l from -r -a 'maki opencode' -d 'Credential store for provider setup'
+complete -c maki-oss -l file -r -F -d 'JSON credential file for provider setup'
+complete -c maki-oss -l field -r -d 'JSON field path (default: .api_key)'
+complete -c maki-oss -l profile -r -F -d 'Provider profile file for provider setup'
+complete -c maki-oss -l attach -d 'Attach the provider to the project sandbox'
+complete -c maki-oss -l no-attach -d 'Never attach, even interactively'
+
+# run and session options.
+complete -c maki-oss -l model -r -d 'Model for sessions and run (provider/model)'
+complete -c maki-oss -l no-sync -d 'Skip the download back to the host on exit'
 
 # image build options.
 complete -c maki-oss -l maki-version -r -d 'Maki release version to build'

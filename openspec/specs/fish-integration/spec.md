@@ -13,7 +13,7 @@ The repository SHALL provide a fish plugin at `fish/` containing `functions/maki
 - **THEN** `type maki-oss` reports a function, `fish -n` reports no syntax errors for the installed files, and `maki-oss help` prints usage
 
 ### Requirement: Completions for commands and options
-The completion file SHALL complete the subcommands `doctor`, `image`, `init`, `up`, `maki`, `run`, `upload`, `download`, `status`, `list`, `logs`, `policy`, `provider`, `start`, `stop`, `rm`, `fish`, and `help`, plus the common flags `--name`, `--image`, `--policy`, `--provider`, `--yes`, and `--allow-env`.
+The completion file SHALL complete the subcommands `doctor`, `image`, `init`, `up`, `maki`, `run`, `upload`, `download`, `status`, `list`, `logs`, `policy`, `provider`, `start`, `stop`, `rm`, `fish`, and `help`, plus the provider subcommands `add`, `attach`, `list`, and `setup`, and the common flags `--name`, `--image`, `--policy`, `--provider`, `--yes`, `--allow-env`, `--model`, `--from`, `--credential`, and `--profile`.
 
 #### Scenario: Subcommand completion
 - **WHEN** the user types `maki-oss ` and presses Tab in a fish session with the plugin installed
@@ -21,7 +21,11 @@ The completion file SHALL complete the subcommands `doctor`, `image`, `init`, `u
 
 #### Scenario: Flag completion
 - **WHEN** the user types `maki-oss run --` and presses Tab
-- **THEN** the completion list includes `--name` and `--yes`
+- **THEN** the completion list includes `--name`, `--yes`, and `--model`
+
+#### Scenario: Provider setup completion
+- **WHEN** the user types `maki-oss provider ` and presses Tab
+- **THEN** the completion list includes `setup`
 
 ### Requirement: Symlink fallback install
 `maki-oss fish install` SHALL install the plugin without fisher by symlinking the plugin's `functions/` and `completions/` entries into `${XDG_CONFIG_HOME:-$HOME/.config}/fish`, and SHALL be idempotent. `maki-oss fish uninstall` SHALL remove only links that point into this repository and SHALL leave foreign files untouched.

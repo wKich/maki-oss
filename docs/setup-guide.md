@@ -94,11 +94,24 @@ no `maki auth`, no writes to the baked config) still apply under YOLO. See
 
 ## 4. Model access through a provider profile
 
-Pick one provider: Anthropic or OpenRouter. Both profiles name
-`/usr/local/bin/maki` as the only binary allowed to reach the vendor endpoint.
+Any provider works: OpenShell binds credentials to endpoint hosts regardless of
+vendor, and this repository ships curated profiles for Anthropic, OpenRouter,
+DeepSeek, Synthetic, OpenAI, Google Gemini, Mistral, xAI, Z.AI, OpenCode Zen,
+and OpenCode Go. The catalog, the credential-store mapping, and the wizard
+reference live in [`docs/providers.md`](providers.md).
 
-Import the profile once per gateway (lint first — it validates the schema
-without registering):
+The fastest path takes a key you already hold — including the ones Maki and
+OpenCode keep in their own stores — and does the profile lint/import and
+provider creation for you:
+
+```sh
+maki-oss provider setup                 # interactive picker
+maki-oss provider setup --from maki --credential opencode-go --yes
+```
+
+The manual equivalent, using Anthropic or OpenRouter as the example. Import the
+profile once per gateway (lint first — it validates the schema without
+registering):
 
 ```sh
 # Anthropic
@@ -122,15 +135,21 @@ OPENROUTER_API_KEY=<your-key> \
   openshell provider create --name maki-openrouter --type maki-openrouter --from-existing
 ```
 
+For any other provider substitute its profile file, type, and environment
+variable from the [catalog table](providers.md#curated-catalog); the wizard
+rejects OAuth-only credentials, and
+[`docs/migrating-providers.md`](migrating-providers.md) explains the options.
+
 Rules that keep the credential boundary intact:
 
 - Never pass the key with `openshell sandbox create --env`; OpenShell warns on
   credential-looking `--env` keys for that reason.
 - Never run `maki auth login` inside the sandbox; the provider is the only
   credential path.
-- Do not set `ANTHROPIC_BASE_URL` / `OPENROUTER_BASE_URL` in the sandbox. A
-  different base URL makes the profile endpointless, the placeholder stops
-  resolving, and requests fail with `credential_endpoint_mismatch`.
+- Do not set a provider base-URL override in the sandbox (for example
+  `ANTHROPIC_BASE_URL` or `OPENROUTER_BASE_URL`). A different base URL makes the
+  profile endpointless, the placeholder stops resolving, and requests fail with
+  `credential_endpoint_mismatch`.
 
 Verify what the gateway now serves (no credential values are printed):
 
@@ -178,6 +197,15 @@ Policy notes:
   [`docs/ai/references.md`](ai/references.md) for upstream links).
 
 ## 6. Run Maki
+
+**Helper shortcut (recommended).** `maki-oss` wraps the whole flow. After the
+one-time `maki-oss provider setup` (which remembers the provider) and
+`maki-oss image build`, running `maki-oss` inside a project creates or starts
+its sandbox, uploads the project when the sandbox is first created, attaches
+remembered providers, launches Maki, and downloads changes back into the
+project directory on exit (`--no-sync` opts out). `maki-oss run "<prompt>"`
+is the headless variant. The raw OpenShell commands below remain the reference
+for what the helper does.
 
 **Interactive** (the command in section 5): after creation you are attached to
 Maki. To return later, `openshell sandbox connect maki`.
@@ -250,6 +278,10 @@ defined once in [`docs/glossary.md`](glossary.md).
 
 - Keep the dry-run record current: after changing an example, re-run the checks
   and update [`docs/verification-log.md`](verification-log.md).
+- Pick any provider: [`docs/providers.md`](providers.md) covers the catalog,
+  the `maki-oss provider setup` wizard, and custom profiles, and
+  [`docs/migrating-providers.md`](migrating-providers.md) migrates credentials
+  from Maki and OpenCode stores.
 - The `add-maki-openshell-fish-helper` change builds a `maki-oss` CLI on top of
   these examples; the `add-openshell-bun-dashboard` change visualizes the same
   gateway.

@@ -16,9 +16,18 @@ image = "maki-agent:local"
 policy = "examples/policies/maki-minimal.yaml"
 
 # Provider profiles to attach at sandbox creation, comma-separated. Create
-# them first with `maki-oss provider add`. Use "maki-anthropic" (Anthropic) or
-# "maki-openrouter" (OpenRouter); see examples/providers/.
+# one first with `maki-oss provider setup` (any provider, including keys
+# already stored by Maki or OpenCode) or `maki-oss provider add`. The value is
+# the provider instance name, for example "maki-anthropic",
+# "maki-opencode-go", or a custom id; see examples/providers/ and
+# docs/providers.md.
 providers = "maki-anthropic"
+
+# Optional default model for sessions and headless runs, in the
+# provider/model form (for example "deepseek/deepseek-chat"). The provider id
+# is Maki's catalog id, not the OpenShell provider name. Leave empty to let
+# Maki's own model picker decide; the --model flag overrides this value.
+model = ""
 
 # Optional CPU and memory limits passed to `openshell sandbox create`.
 cpu = "2"

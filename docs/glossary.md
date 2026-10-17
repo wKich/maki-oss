@@ -19,6 +19,18 @@ reference pack.
 - **Profile** — a reusable provider definition naming credentials, network
   endpoints, allowed binaries, and optional refresh behavior (for example,
   `examples/providers/maki-anthropic.yaml`).
+- **Generated profile** — a custom provider profile written by
+  `maki-oss provider setup` under the helper's config directory
+  (`~/.config/maki-openshell/profiles/`); it contains configuration only,
+  never a credential value.
+- **Catalog mapping** — `examples/providers/catalog.tsv`, the machine-readable
+  table that resolves a credential-store slug (`maki`/`opencode` plus the
+  provider id) to a curated profile id.
+- **Credential store** — a host-side file where an agent keeps its own
+  provider credentials, such as Maki's
+  (`~/.local/state/maki/auth/<slug>.json`) or OpenCode's
+  (`~/.local/share/opencode/auth.json`); the setup wizard scans these without
+  printing values.
 - **Credential placeholder** — the opaque `openshell:resolve:env:<KEY>` value a
   sandbox process receives instead of a real secret; the proxy substitutes the
   real value only at endpoints the profile authorizes.

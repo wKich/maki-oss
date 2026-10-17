@@ -1,0 +1,42 @@
+# Maki + Google Gemini provider profile for OpenShell.
+#
+# Lint and import from the repository root:
+#   openshell profile lint -f examples/providers/maki-google.yaml
+#   openshell profile import -f examples/providers/maki-google.yaml --global
+#
+# Then create the provider instance from your host environment:
+#   GEMINI_API_KEY=<key> openshell provider create \
+#     --name maki-google --type maki-google --from-existing
+#
+# The profile authorizes only /usr/local/bin/maki (the path used by
+# examples/maki-image) to reach generativelanguage.googleapis.com, and binds
+# GEMINI_API_KEY to that endpoint. Maki sends the key in the x-goog-api-key
+# header. Do not set a base-URL override (for example GOOGLE_BASE_URL) in the
+# sandbox: a different base URL would leave the credential unbound.
+
+id: maki-google
+display_name: Maki (Google Gemini)
+description: Google Gemini inference API for the Maki coding agent
+category: inference
+inference_capable: true
+
+credentials:
+  - name: api_key
+    description: Google Gemini API key
+    env_vars: [GEMINI_API_KEY]
+    required: true
+    auth_style: header
+    header_name: x-goog-api-key
+
+discovery:
+  credentials: [api_key]
+
+endpoints:
+  - host: generativelanguage.googleapis.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+
+binaries:
+  - /usr/local/bin/maki

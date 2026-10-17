@@ -102,6 +102,21 @@ Do not add `--level warn`: policy events are info-level and would be filtered
 out. The logged binary path is how OpenShell identifies the caller; use it to
 fix a rule that lists the wrong path.
 
+## 7. Session sync-back
+
+Run from the project directory after a session launched by the helper:
+
+```sh
+maki-oss run "create a file named sync-probe.txt in the project root"
+ls sync-probe.txt
+```
+
+**Expected:** the file exists on the host after the run and the helper printed
+`Synced sandbox changes back to ...` on stderr. A host-only file placed next
+to it before the run is still present afterwards (the merge never deletes).
+`maki-oss --no-sync` skips the download and prints the manual command; a
+failed download warns on stderr but preserves Maki's exit code.
+
 ## Beyond this checklist
 
 These checks prove the boundary, not the model round-trip. A successful

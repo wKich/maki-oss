@@ -6,8 +6,8 @@ mismatch — do not work around a failed check by weakening isolation.
 
 The only inputs required from the user:
 
-- a model API key exported in the environment (`ANTHROPIC_API_KEY` or
-  `OPENROUTER_API_KEY`), and
+- a model API key — exported in the environment, or already present in a Maki
+  or OpenCode credential store — and
 - the project path to upload (optional; skip the upload steps to work in an
   empty workspace).
 
@@ -28,14 +28,27 @@ Verify: Docker `28.0` or later; `openshell status` shows `Status: Connected`;
 
 Then choose the provider (decision point A):
 
-- If `ANTHROPIC_API_KEY` is set, use:
-  - profile file `examples/providers/maki-anthropic.yaml`
-  - profile ID and provider type `maki-anthropic`
-- Else if `OPENROUTER_API_KEY` is set, use:
-  - profile file `examples/providers/maki-openrouter.yaml`
-  - profile ID and provider type `maki-openrouter`
-- If neither key is set, stop and ask the user to export one. Do not accept a
-  key pasted into the conversation, and do not put a key on a command line.
+- If `maki-oss` is available, prefer the wizard: run `maki-oss provider setup`
+  (interactive) or `maki-oss provider setup --from maki --credential <slug>
+  --yes` for a credential already in a store. It imports the curated profile
+  and creates the provider, so skip to Phase 3.
+- Otherwise map an exported key to its curated profile:
+  - `ANTHROPIC_API_KEY` → `examples/providers/maki-anthropic.yaml`, type
+    `maki-anthropic`
+  - `OPENROUTER_API_KEY` → `examples/providers/maki-openrouter.yaml`, type
+    `maki-openrouter`
+  - `DEEPSEEK_API_KEY`, `SYNTHETIC_API_KEY`, `OPENAI_API_KEY`,
+    `GEMINI_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `ZHIPU_API_KEY`, or
+    `OPENCODE_API_KEY` → the matching `maki-*` profile under
+    `examples/providers/`; use the catalog table in `docs/providers.md` to
+    pick between plans (for example Z.AI coding vs standard).
+- If no key is available, stop and ask the user to export one or to run
+  `maki-oss provider setup`. Do not accept a key pasted into the conversation,
+  and do not put a key on a command line.
+
+OAuth-only credentials (for example a ChatGPT or xAI OAuth login) are not
+usable here; report that and point at `docs/migrating-providers.md` instead of
+extracting tokens.
 
 ## Phase 1 — Build the image
 
@@ -48,7 +61,9 @@ Verify: the build succeeds and prints `maki 0.6.0`.
 
 ## Phase 2 — Load the provider profile and create the provider
 
-Substitute the profile file and type chosen in Phase 0:
+If Phase 0 used `maki-oss provider setup`, the lint, import, and provider
+creation already happened; run the verification commands below and skip to
+Phase 3. Otherwise substitute the profile file and type chosen in Phase 0:
 
 ```sh
 openshell profile lint -f examples/providers/maki-anthropic.yaml
@@ -63,10 +78,11 @@ openshell profile describe maki-anthropic
 openshell provider list
 ```
 
-Expected: the profile shows `api.anthropic.com:443` and binary
-`/usr/local/bin/maki`; the provider list names `maki-anthropic` and exposes
-credential key names only (never values). If `provider create` fails, the key
-environment variable is missing for the type's `discovery` section.
+Expected: the profile shows the provider's endpoint and binary
+(`api.anthropic.com:443` and `/usr/local/bin/maki` for this example); the
+provider list names the instance and exposes credential key names only (never
+values). If `provider create` fails, the key environment variable is missing
+for the type's `discovery` section.
 
 ## Phase 3 — Choose the sandbox policy
 
@@ -136,6 +152,22 @@ to `-p` in place of the smoke-test string.
 `sandbox exec` starts a new process, so it picks up the current provider
 placeholders. Use `--output-format json` for machine-readable results.
 
+### Helper shortcut
+
+If `maki-oss` is available (from this repository), it performs Phases 2–7 —
+except cleanup — in one command per project:
+
+```sh
+maki-oss provider setup        # one-time; remembers the provider
+cd "$PROJECT_PATH"
+maki-oss                       # ensure sandbox + interactive Maki + sync back
+maki-oss run "the task text"   # headless variant
+```
+
+The helper still uses provider profiles and the minimal policy, and never
+relaxes the invariants below. Use the raw commands when you need explicit
+control or are debugging the boundary itself.
+
 ## Phase 7 — Collect results and clean up
 
 ```sh
@@ -154,7 +186,8 @@ results under `/sandbox`.
 - Egress stays deny-by-default. Add the narrowest missing rule, never `tls:
   skip`, `access: full`, or a wildcard host to fix a denial.
 - The sandbox process stays non-root (uid/gid 1500).
-- Never run `maki auth login` inside a sandbox, and never set
-  `ANTHROPIC_BASE_URL` / `OPENROUTER_BASE_URL` there.
+- Never run `maki auth login` inside a sandbox, and never set a provider
+  base-URL override there (for example `ANTHROPIC_BASE_URL`,
+  `OPENROUTER_BASE_URL`, or `DEEPSEEK_BASE_URL`).
 - Do not edit `examples/` to match a failing local state; fix the local state
   or report the drift.
