@@ -61,3 +61,15 @@ How to use this pack:
 | CLI: flags, subcommands, run paths | [CLI](https://maki.sh/docs/cli/) | v0.6.0 |
 | Install script | [Maki install.sh](https://maki.sh/install.sh) | v0.6.0 |
 | Source repository | [tontinton/maki](https://github.com/tontinton/maki) | v0.6.0 |
+
+## Ponytail (project-local YAGNI ruleset)
+
+Used by `docs/yagni.md`; installed via the project-scoped `opencode.json`
+plugin pin and the vendored `.maki/skills/ponytail*/` copies.
+
+| Topic | Link | Verified against |
+|---|---|---|
+| OpenCode plugin configuration (`plugins` key, project scope) | [OpenCode plugins](https://opencode.ai/v2/docs/plugins) | v2.0.21 |
+| OpenCode plugin API (`{ id, setup }`, skill/command transforms) | [Building plugins](https://opencode.ai/v2/docs/build/plugins) | v2.0.21 |
+| Ponytail install notes for OpenCode | [Ponytail INSTALL.md](https://github.com/DietrichGebert/ponytail/blob/main/INSTALL.md) | v5.3.2 |
+| Ponytail source repository | [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) | v5.3.2 |

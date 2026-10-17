@@ -49,6 +49,8 @@ Maki, and downloads changes back into the project directory on exit.
 - [`docs/verification.md`](docs/verification.md) — isolation checklist with
   exact commands and expected output.
 - [`docs/glossary.md`](docs/glossary.md) — shared vocabulary for these docs.
+- [`docs/yagni.md`](docs/yagni.md) — project-local ponytail YAGNI ruleset:
+  install, verify, and refresh the pinned plugin and skill copies.
 - [`docs/ai/agent-playbook.md`](docs/ai/agent-playbook.md) — ordered,
   executable steps for a coding agent.
 - [`docs/ai/references.md`](docs/ai/references.md) — curated upstream links,
