@@ -22,6 +22,10 @@ maki	zai	maki-zai	Z.AI pay-as-you-go key
 maki	zhipuai-coding-plan	maki-zai-coding	Z.AI coding-plan key; alias of zai with plan = "coding"
 maki	opencode	maki-opencode	OpenCode Zen API key
 maki	opencode-go	maki-opencode-go	OpenCode Go API key
+maki	xiaomi-token-plan-sgp	maki-xiaomi-token-plan-sgp	Xiaomi token plan key (Singapore region)
+maki	minimax-coding-plan	maki-minimax-coding-plan	MiniMax coding-plan key (Anthropic-protocol endpoint)
+maki	kimi-for-coding	maki-kimi-for-coding	Kimi coding-plan key (api.kimi.ai)
+maki	nano-gpt	maki-nano-gpt	NanoGPT API key
 opencode	anthropic	maki-anthropic	Anthropic API key
 opencode	openrouter	maki-openrouter	OpenRouter API key
 opencode	deepseek	maki-deepseek	DeepSeek API key
@@ -34,3 +38,7 @@ opencode	zai	maki-zai	Z.AI pay-as-you-go key
 opencode	zai-coding-plan	maki-zai-coding	Z.AI coding-plan key; alias of zai with plan = "coding"
 opencode	opencode	maki-opencode	OpenCode Zen API key
 opencode	opencode-go	maki-opencode-go	OpenCode Go API key
+opencode	xiaomi-token-plan-sgp	maki-xiaomi-token-plan-sgp	Xiaomi token plan key (Singapore region)
+opencode	minimax-coding-plan	maki-minimax-coding-plan	MiniMax coding-plan key (Anthropic-protocol endpoint)
+opencode	kimi-for-coding	maki-kimi-for-coding	Kimi coding-plan key (api.kimi.ai)
+opencode	nano-gpt	maki-nano-gpt	NanoGPT API key

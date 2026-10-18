@@ -127,6 +127,10 @@ never appears in argv, output, or this repository:
 ./bin/maki-oss provider setup
 ```
 
+One provider is enough to start. To migrate a host that already holds many
+credentials — audit both stores, classify each slug, and re-sync after a key
+rotates — follow [`docs/dogfood-migration.md`](../dogfood-migration.md).
+
 ### Verify
 
 ```sh

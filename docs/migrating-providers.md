@@ -173,5 +173,9 @@ jq -r '.api_key' "$tmp/auth/opencode-go.json"     # fixture
 rm -rf "$tmp"
 ```
 
+For a full audit → migrate → verify run against a real host, including slugs
+with no curated profile and the ones that cannot be migrated at all, see
+[`docs/dogfood-migration.md`](dogfood-migration.md).
+
 The real-gateway dry run of the wizard is recorded in
 [`docs/verification-log.md`](verification-log.md).

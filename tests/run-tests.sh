@@ -1030,19 +1030,19 @@ test_provider_setup_hidden_prompt() {
 test_provider_setup_custom_generation() {
     begin "unknown store slug generates, lints, and imports a custom profile"
     new_case setup-custom
-    seed_maki_store nano-gpt "fixture-nano-key"
-    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    seed_maki_store acme-router "fixture-nano-key"
+    CREDENTIAL_ENV=ACME_ROUTER_API_KEY
     CREDENTIAL_LOG=$CASE/credential-env.log
 
-    run_maki_stdin "1\n\n\napi.nano-gpt.test\n/v1\n" provider setup --yes
+    run_maki_stdin "1\n\n\napi.acme-router.test\n/v1\n" provider setup --yes
     assert_rc 0
-    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
+    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
     if [ ! -f "$generated" ]; then
         bad "generated profile not found: $generated"
     else
-        grep -Fq "id: maki-nano-gpt" "$generated" || bad "generated profile id missing"
-        grep -Fq "env_vars: [NANO_GPT_API_KEY]" "$generated" || bad "generated profile env var missing"
-        grep -Fq "host: api.nano-gpt.test" "$generated" || bad "generated profile host missing"
+        grep -Fq "id: maki-acme-router" "$generated" || bad "generated profile id missing"
+        grep -Fq "env_vars: [ACME_ROUTER_API_KEY]" "$generated" || bad "generated profile env var missing"
+        grep -Fq "host: api.acme-router.test" "$generated" || bad "generated profile host missing"
         grep -Fq "path: /v1" "$generated" || bad "generated profile path missing"
         if grep -Fq "fixture-nano-key" "$generated"; then
             bad "generated profile contains the credential value"
@@ -1050,7 +1050,7 @@ test_provider_setup_custom_generation() {
     fi
     assert_log_line "$generated"
     assert_log_before "lint" "import"
-    assert_log_line "maki-nano-gpt"
+    assert_log_line "maki-acme-router"
     assert_credential_env "fixture-nano-key"
     assert_secret_absent "fixture-nano-key"
 }
@@ -1059,10 +1059,10 @@ test_provider_setup_custom_preserved() {
     begin "declining overwrite preserves the generated profile"
     new_case setup-custom-keep
     mkdir -p "$XDG_CONFIG_HOME/maki-openshell/profiles"
-    keep=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
-    write_fixture_profile "$keep" maki-nano-gpt NANO_GPT_API_KEY
-    seed_maki_store nano-gpt "fixture-keep-key"
-    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    keep=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
+    write_fixture_profile "$keep" maki-acme-router ACME_ROUTER_API_KEY
+    seed_maki_store acme-router "fixture-keep-key"
+    CREDENTIAL_ENV=ACME_ROUTER_API_KEY
     CREDENTIAL_LOG=$CASE/credential-env.log
 
     run_maki_stdin "1\n\n\nnew.example.com\n\nn\n" provider setup
@@ -1098,15 +1098,15 @@ test_provider_setup_credential_non_exposure() {
     begin "credential values never reach argv, output, or generated files"
     new_case setup-no-leak
     value='fixture-do-not-leak-9f3a'
-    seed_maki_store nano-gpt "$value"
-    CREDENTIAL_ENV=NANO_GPT_API_KEY
+    seed_maki_store acme-router "$value"
+    CREDENTIAL_ENV=ACME_ROUTER_API_KEY
     CREDENTIAL_LOG=$CASE/credential-env.log
 
-    run_maki_stdin "1\n\n\napi.nano-gpt.test\n/v1\n" provider setup --yes
+    run_maki_stdin "1\n\n\napi.acme-router.test\n/v1\n" provider setup --yes
     assert_rc 0
     assert_credential_env "$value"
     assert_secret_absent "$value"
-    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-nano-gpt.yaml
+    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
     if [ -f "$generated" ] && grep -Fq -- "$value" "$generated"; then
         bad "generated profile contains the credential value"
     fi
@@ -1128,7 +1128,7 @@ test_provider_setup_usage_errors() {
 test_provider_setup_custom_validation() {
     begin "custom setup rejects invalid ids and hosts"
     new_case setup-custom-invalid
-    seed_maki_store nano-gpt "fixture-invalid-key"
+    seed_maki_store acme-router "fixture-invalid-key"
     CREDENTIAL_ENV=GOOD_PROVIDER_API_KEY
     CREDENTIAL_LOG=$CASE/credential-env.log
 

@@ -46,6 +46,9 @@ Maki, and downloads changes back into the project directory on exit.
   `provider setup` wizard, and custom profiles.
 - [`docs/migrating-providers.md`](docs/migrating-providers.md) — move keys out
   of Maki and OpenCode stores, and the OAuth limitation.
+- [`docs/dogfood-migration.md`](docs/dogfood-migration.md) — the audit →
+  migrate → verify loop run against a real host, and how to re-sync after a
+  key rotates.
 - [`docs/verification.md`](docs/verification.md) — isolation checklist with
   exact commands and expected output.
 - [`docs/glossary.md`](docs/glossary.md) — shared vocabulary for these docs.
