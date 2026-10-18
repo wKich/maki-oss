@@ -5,6 +5,8 @@
 //   - loopback bind by default; any other host requires an explicit token;
 //   - mutating routes require the session token in `X-Dashboard-Token`, which
 //     also blocks cross-site form posts;
+//   - the log stream requires the same token as a `token` query parameter
+//     (EventSource cannot send headers), in read-only mode too;
 //   - `--read-only` rejects every mutating route with 403.
 
 import { loadConfig, type DashboardConfig } from "./config.ts";
@@ -51,6 +53,8 @@ export interface DashboardHandle {
   hostname: string;
   token: string | null;
   readOnly: boolean;
+  /** Live log hubs, retained only while a stream is active. */
+  hubCount(): number;
   stop(): void;
 }
 
@@ -137,7 +141,7 @@ export function createDashboardServer(options: DashboardServerOptions = {}): Das
     );
   }
 
-  const token = readOnly ? null : (explicitToken ?? mintToken());
+  const token = explicitToken ?? mintToken();
   const config = options.config ?? loadConfig();
   const client = options.client ?? new OpenShellClient(options.clientOptions);
   const hubs = new Map<string, LogHub>();
@@ -153,7 +157,14 @@ export function createDashboardServer(options: DashboardServerOptions = {}): Das
     return null;
   };
 
+  // Streams are gated by the page token in read-write and read-only alike:
+  // the browser's EventSource cannot send headers, so it rides the URL.
+  // `guardMutation` still rejects every write in read-only mode.
   const serveLogs = (url: URL, request: Request): Response => {
+    const provided = url.searchParams.get("token") ?? "";
+    if (!provided || !tokensEqual(provided, token)) {
+      return forbidden("forbidden", "missing or invalid session token");
+    }
     const name = (url.searchParams.get("name") ?? "").trim();
     if (!name) {
       return json(
@@ -163,7 +174,7 @@ export function createDashboardServer(options: DashboardServerOptions = {}): Das
     }
     let hub = hubs.get(name);
     if (!hub) {
-      hub = new LogHub(client, name);
+      hub = new LogHub(client, name, { onIdle: () => hubs.delete(name) });
       hubs.set(name, hub);
     }
     const subscription = hub.subscribe();
@@ -349,6 +360,7 @@ export function createDashboardServer(options: DashboardServerOptions = {}): Das
     hostname: server.hostname,
     token,
     readOnly,
+    hubCount: () => hubs.size,
     stop: () => {
       for (const hub of hubs.values()) hub.stop();
       hubs.clear();

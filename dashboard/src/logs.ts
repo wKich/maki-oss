@@ -24,25 +24,30 @@ export interface LogSubscription {
   unsubscribe(): void;
 }
 
+export interface LogHubOptions {
+  heartbeatMs?: number;
+  /** Invoked once the hub has no subscribers and no running child. */
+  onIdle?: () => void;
+}
+
 export class LogHub {
   private readonly client: OpenShellClient;
   private readonly name: string;
   private readonly heartbeatMs: number;
+  private readonly onIdle: (() => void) | null;
   private readonly buffer: string[] = [];
   private readonly subscribers = new Set<Subscriber>();
   private readonly encoder = new TextEncoder();
   private proc: LogsProcess | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private idleNotified = false;
 
-  constructor(
-    client: OpenShellClient,
-    name: string,
-    options: { heartbeatMs?: number } = {},
-  ) {
+  constructor(client: OpenShellClient, name: string, options: LogHubOptions = {}) {
     this.client = client;
     this.name = name;
     this.heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+    this.onIdle = options.onIdle ?? null;
   }
 
   /** Lines currently retained for replay (oldest first). */
@@ -96,6 +101,7 @@ export class LogHub {
   private removeSubscriber(subscriber: Subscriber): void {
     if (!this.subscribers.delete(subscriber)) return;
     if (this.subscribers.size === 0) this.stopChild();
+    this.notifyIdle();
   }
 
   private start(): void {
@@ -176,6 +182,15 @@ export class LogHub {
       this.subscribers.delete(subscriber);
       subscriber.close();
     }
+    this.notifyIdle();
+  }
+
+  /** Release the hub once nothing is subscribed and the child is gone. */
+  private notifyIdle(): void {
+    if (this.idleNotified) return;
+    if (this.subscribers.size > 0 || this.proc !== null) return;
+    this.idleNotified = true;
+    this.onIdle?.();
   }
 
   private stopChild(): void {

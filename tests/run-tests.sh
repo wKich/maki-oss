@@ -14,7 +14,10 @@ MAKI=$ROOT/bin/maki-oss
 STUB_DIR=$ROOT/tests/stub
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/maki-oss-tests.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT INT TERM
+cleanup() { rm -rf "$WORK"; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 PASS=0
 FAIL=0
@@ -78,6 +81,8 @@ new_case() {
     CREDENTIAL_LOG=
     DOWNLOAD_EXIT=
     DOWNLOAD_FIXTURE=
+    JSON_COMPACT=
+    CREATE_RACE=
     INTERACTIVE=
     TEST_ENV_VALUE=
     PATH_OVERRIDE=
@@ -106,6 +111,8 @@ run_maki_with_input() { # STDIN_FILE ARGS...
         STUB_ENV_LOG="${CREDENTIAL_LOG:-}" \
         STUB_DOWNLOAD_EXIT="${DOWNLOAD_EXIT:-}" \
         STUB_DOWNLOAD_FIXTURE="${DOWNLOAD_FIXTURE:-}" \
+        STUB_JSON_COMPACT="${JSON_COMPACT:-0}" \
+        STUB_CREATE_RACE="${CREATE_RACE:-0}" \
         MAKI_OSS_SANDBOX_NAME="${ENV_NAME:-}" \
         MAKI_OSS_IMAGE="${ENV_IMAGE:-}" \
         MAKI_OSS_POLICY="${ENV_POLICY:-}" \
@@ -256,6 +263,12 @@ assert_err_has() {
 assert_out_missing() {
     if grep -Fq -- "$1" "$OUT" 2>/dev/null; then
         bad "stdout unexpectedly contains: $1"
+    fi
+}
+
+assert_err_missing() {
+    if grep -Fq -- "$1" "$ERR" 2>/dev/null; then
+        bad "stderr unexpectedly contains: $1"
     fi
 }
 
@@ -537,6 +550,44 @@ test_env_lookalike() {
     run_maki init --env TOKENIZERS_PARALLELISM=false
     assert_rc 0
     assert_log_line "TOKENIZERS_PARALLELISM=false"
+}
+
+test_env_refusal_session_path() {
+    begin "--env refuses credential-like keys on the session path"
+    new_case env-refusal-run
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_remembered_provider maki-anthropic
+    run_maki run --env ANTHROPIC_API_KEY=sk-secret "hi"
+    assert_rc 1
+    assert_err_has "ANTHROPIC_API_KEY"
+    assert_err_has "provider"
+    assert_log_missing "create"
+}
+
+test_session_reuse_announces_overwrite() {
+    begin "reusing a sandbox announces the sync-back overwrite"
+    new_case reuse-note
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki run "hi"
+    assert_rc 0
+    assert_err_has "sync-back"
+    assert_err_has "upload"
+    assert_log_missing "upload"
+
+    # A session that creates the sandbox uploads instead, so no warning.
+    reset_state
+    reset_log
+    seed_remembered_provider maki-stub
+    run_maki run "hi"
+    assert_rc 0
+    assert_log_has "upload"
+    assert_err_missing "sync-back"
 }
 
 test_rm_confirmation() {
@@ -1380,6 +1431,94 @@ test_no_jq_fallback() {
     run_maki status
     assert_rc 0
     assert_out_has "Phase:     Ready"
+
+    # Compact single-line JSON (no space after the colon) parses too.
+    reset_log
+    JSON_COMPACT=1
+    run_maki status
+    assert_rc 0
+    assert_out_has "Phase:     Ready"
+
+    reset_log
+    run_maki up
+    assert_rc 0
+    assert_log_missing "create"
+    assert_out_has "already exists"
+
+    # A later sandbox on the same line must not supply the target's phase.
+    printf 'Stopped\n' >"$STUB_STATE_DIR/sandboxes/maki-myproject"
+    printf 'Ready\n' >"$STUB_STATE_DIR/sandboxes/maki-zzz"
+    reset_log
+    run_maki status
+    assert_rc 0
+    assert_out_has "Phase:     Stopped"
+}
+
+test_no_jq_attached_providers() {
+    begin "status lists every attached provider without jq"
+    new_case no-jq-providers
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    PATH_OVERRIDE=$(no_jq_path)
+    JSON_COMPACT=1
+    seed_sandbox maki-myproject Ready
+    attach_stub_provider maki-myproject anthropic
+    attach_stub_provider maki-myproject openrouter
+    run_maki status
+    assert_rc 0
+    assert_out_has "Providers: anthropic,openrouter"
+}
+
+test_session_create_race_reuses() {
+    begin "losing a create race reuses the winner's sandbox"
+    new_case create-race
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_remembered_provider maki-stub
+    CREATE_RACE=1
+    run_maki run "hi"
+    assert_rc 0
+    assert_log_has "exec"
+    assert_log_has "download"
+    assert_log_missing "upload"
+}
+
+test_provider_setup_sigint() {
+    begin "SIGINT during provider setup exits and cleans up"
+    new_case setup-sigint
+    if ! command -v pkill >/dev/null 2>&1; then
+        skipped "pkill is not installed"
+        return 0
+    fi
+    mkdir -p "$CASE/tmp"
+    mkfifo "$CASE/in.fifo"
+    # The helper runs in the foreground so SIGINT is not ignored (async
+    # children ignore it). The watchdog holds the fifo's write end open,
+    # signals the helper once it is prompting, then force-kills so a
+    # regression fails instead of hanging the suite.
+    (
+        exec 3>"$CASE/in.fifo"
+        sleep 2
+        pkill -INT -f "$MAKI provider setup" 2>/dev/null || true
+        sleep 3
+        pkill -KILL -f "$MAKI provider setup" 2>/dev/null || true
+    ) &
+    RC=0
+    TMPDIR="$CASE/tmp" \
+    PATH="$STUB_DIR:$PATH" \
+    HOME="$HOME" \
+    XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+    STUB_LOG="$STUB_LOG" \
+    STUB_STATE_DIR="$STUB_STATE_DIR" \
+    MAKI_OSS_INTERACTIVE=1 \
+        "$MAKI" provider setup >"$OUT" 2>"$ERR" <"$CASE/in.fifo" || RC=$?
+    wait || true
+    if [ "$RC" -ne 130 ]; then
+        bad "expected exit 130 after SIGINT, got $RC"
+    fi
+    if ls "$CASE/tmp"/maki-oss-setup.* >/dev/null 2>&1; then
+        bad "setup temp directory left behind after SIGINT"
+    fi
 }
 
 test_missing_policy_dependency() {
@@ -1508,6 +1647,7 @@ run_test test_maki_attach
 run_test test_upload_no_mount
 run_test test_download
 run_test test_env_refusal
+run_test test_env_refusal_session_path
 run_test test_env_allow_override
 run_test test_env_lookalike
 run_test test_rm_confirmation
@@ -1537,11 +1677,14 @@ run_test test_provider_setup_custom_preserved
 run_test test_provider_setup_lint_failure
 run_test test_provider_setup_credential_non_exposure
 run_test test_provider_setup_usage_errors
+run_test test_provider_setup_sigint
 run_test test_provider_setup_custom_validation
 run_test test_provider_setup_no_jq
 run_test test_run_model_flag
 run_test test_session_creates_uploads_and_syncs
 run_test test_session_reuses_without_upload
+run_test test_session_reuse_announces_overwrite
+run_test test_session_create_race_reuses
 run_test test_session_starts_stopped_sandbox
 run_test test_session_attaches_missing_provider
 run_test test_session_inline_bootstrap
@@ -1553,6 +1696,7 @@ run_test test_session_no_sync
 run_test test_session_sync_failure_preserves_code
 run_test test_session_sync_merge
 run_test test_no_jq_fallback
+run_test test_no_jq_attached_providers
 run_test test_missing_policy_dependency
 run_test test_fish_plugin
 run_test test_fish_fisher_layout

@@ -568,7 +568,9 @@
     state.logs.lines = [];
     state.logs.ended = false;
     state.logs.started = true;
-    const source = new EventSource(`/events/logs?name=${encodeURIComponent(state.selected)}`);
+    const source = new EventSource(
+      `/events/logs?name=${encodeURIComponent(state.selected)}&token=${encodeURIComponent(state.token ?? "")}`,
+    );
     state.logs.es = source;
 
     source.addEventListener("ready", () => {

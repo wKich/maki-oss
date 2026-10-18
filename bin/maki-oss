@@ -468,16 +468,34 @@ sandbox_phase() {
         printf '%s' "$sandbox_json" \
             | jq -r --arg n "$1" '[.sandboxes[]? | select(.name == $n) | .phase][0] // empty'
     else
+        # Line-oriented fallback: allow no space after the colon, and take
+        # the first phase after the target's name so a later sandbox on the
+        # same line cannot supply it.
         printf '%s' "$sandbox_json" | awk -v target="$1" '
             {
-                if (index($0, "\"name\": \"" target "\"") > 0) found = 1
-                if (found && index($0, "\"phase\":") > 0) {
+                if (!found) {
+                    rest = $0
+                    at = index(rest, "\"name\": \"" target "\"")
+                    if (at > 0) {
+                        skip = length("\"name\": \"" target "\"")
+                    } else {
+                        at = index(rest, "\"name\":\"" target "\"")
+                        skip = length("\"name\":\"" target "\"")
+                    }
+                    if (at == 0) next
+                    found = 1
+                    rest = substr(rest, at + skip)
+                    if (index(rest, "\"phase\":") == 0) next
+                    line = rest
+                } else {
                     line = $0
-                    sub(/.*"phase":[ ]*"/, "", line)
-                    sub(/".*/, "", line)
-                    print line
-                    exit
                 }
+                if ((at = index(line, "\"phase\":")) == 0) next
+                line = substr(line, at)
+                sub(/^"phase":[ ]*"/, "", line)
+                sub(/".*/, "", line)
+                print line
+                exit
             }
         '
     fi
@@ -499,8 +517,11 @@ attached_providers() {
     if [ "$have_jq" -eq 1 ]; then
         printf '%s' "$attached_json" | jq -r '.providers[]?.name'
     else
+        # grep -o emits one "name" match per line, so providers sharing a
+        # compact-JSON line are all returned (a greedy sed keeps only the last).
         printf '%s' "$attached_json" \
-            | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p'
+            | grep -o '"name":[[:space:]]*"[^"]*"' \
+            | sed 's/^"name":[[:space:]]*"\([^"]*\)"$/\1/'
     fi
 }
 
@@ -733,6 +754,7 @@ cmd_up() {
 # Builds and runs `openshell sandbox create` for the resolved settings. The
 # caller prints user-facing messages; this function prints nothing itself.
 run_sandbox_create() { # NAME
+    check_env_hygiene
     create_name=$1
     create_image=$(resolved_image)
     create_policy=$(resolved_policy)
@@ -770,7 +792,11 @@ run_sandbox_create() { # NAME
     done
     set +f
     IFS=$saved_ifs
-    run_gateway "$@"
+    if [ "$create_allow_fail" -eq 1 ]; then
+        os "$@"
+    else
+        run_gateway "$@"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -910,12 +936,22 @@ ensure_attach_missing() { # NAME
 }
 
 ensure_sandbox_created=0
+# Set to 1 around `sandbox create` so a lost race (the name already exists)
+# returns control instead of exiting; the caller re-checks and reuses.
+create_allow_fail=0
+
+# A reused sandbox still holds yesterday's copy of the project: the exit sync
+# merges it back over matching host files, so say so before that happens.
+announce_sandbox_reuse() { # NAME
+    note "Reusing '$1' without uploading: on exit, sync-back overwrites host files that also exist in the sandbox. Run '$PROGRAM upload' to refresh it first."
+}
 
 ensure_project_sandbox() {
     ensure_provider_list
     name=$(resolved_name)
     phase=$(sandbox_phase "$name")
     if [ -n "$phase" ]; then
+        announce_sandbox_reuse "$name"
         case $phase in
             Ready)
                 note "Reusing sandbox '$name'."
@@ -936,8 +972,23 @@ ensure_project_sandbox() {
             die_dep "policy file not found: $ensure_policy (pass --policy or fix the config)"
         fi
         note "Creating sandbox '$name'..."
-        run_sandbox_create "$name"
-        ensure_sandbox_created=1
+        create_rc=0
+        create_allow_fail=1
+        run_sandbox_create "$name" || create_rc=$?
+        create_allow_fail=0
+        if [ "$create_rc" -ne 0 ]; then
+            # Another run may have won the race; its sandbox is the same
+            # project directory, so reuse beats a hard gateway failure.
+            phase=$(sandbox_phase "$name")
+            if [ -z "$phase" ]; then
+                err "openshell sandbox create failed (exit status $create_rc)"
+                exit "$EX_GATEWAY"
+            fi
+            announce_sandbox_reuse "$name"
+            note "Sandbox '$name' was created by a concurrent run (phase: $phase); reusing it."
+        else
+            ensure_sandbox_created=1
+        fi
         wait_for_sandbox_ready "$name"
     fi
     if [ "$ensure_sandbox_created" -eq 1 ]; then
@@ -1288,7 +1339,11 @@ setup_cleanup() {
         rm -rf "$setup_tmp"
     fi
 }
-trap setup_cleanup EXIT INT TERM
+# Signals must stop the program, not just clean up: an EXIT-only handler
+# replaced the default termination and let the wizard run on after Ctrl-C.
+trap setup_cleanup EXIT
+trap 'setup_cleanup; exit 130' INT
+trap 'setup_cleanup; exit 143' TERM
 
 # Interactive when stdin is a terminal. MAKI_OSS_INTERACTIVE=1 treats piped
 # stdin as interactive for scripted runs (tests, `printf ... | maki-oss`).

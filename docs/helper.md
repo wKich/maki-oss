@@ -147,6 +147,12 @@ merges: matching files are overwritten and host-only files are never deleted.
 `--no-sync` skips it. `--model provider/model` (or the config `model` key)
 selects the model.
 
+A session that **reuses** an existing sandbox does not re-upload the project,
+so the sandbox may still hold an earlier copy of your files. Because the exit
+sync overwrites matching host files, the helper prints a `Reusing ...` note to
+stderr on that path. Run `maki-oss upload` first to refresh the sandbox from
+the current host tree when you do not want that merge.
+
 ```sh
 cd ~/code/myproject
 maki-oss            # ensure + interactive Maki + sync back

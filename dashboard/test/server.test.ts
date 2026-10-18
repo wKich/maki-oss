@@ -102,6 +102,10 @@ function argvLog(): string {
   return existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
 }
 
+function resetLog(): void {
+  writeFileSync(logPath, "");
+}
+
 function phase(name: string): string {
   return readFileSync(join(stateDir, "sandboxes", name), "utf8").trim();
 }
@@ -149,12 +153,12 @@ describe("page and doctor", () => {
     expect(html).toContain(testConfig.image);
   });
 
-  test("read-only mode serves a page without a token", async () => {
+  test("read-only mode serves a read token for streams", async () => {
     const handle = start({ readOnly: true });
-    expect(handle.token).toBeNull();
+    expect(handle.token).toBeString();
     const html = await (await fetch(`${base(handle)}/`)).text();
     expect(html).toContain('"readOnly":true');
-    expect(html).toContain('"token":null');
+    expect(html).toContain(`"token":"${handle.token}"`);
   });
 
   test("GET /api/doctor reports CLI and gateway status", async () => {
@@ -390,7 +394,9 @@ describe("SSE logs", () => {
         STUB_LOG_KEEPALIVE: "0",
       }),
     });
-    const response = await fetch(`${base(handle)}/events/logs?name=demo`);
+    const response = await fetch(
+      `${base(handle)}/events/logs?name=demo&token=${handle.token}`,
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const text = await readUntil(response.body!.getReader(), (value) =>
@@ -424,9 +430,12 @@ describe("SSE logs", () => {
     const handle = start({ client: fakeClient });
 
     const abort = new AbortController();
-    const response = await fetch(`${base(handle)}/events/logs?name=demo`, {
-      signal: abort.signal,
-    });
+    const response = await fetch(
+      `${base(handle)}/events/logs?name=demo&token=${handle.token}`,
+      {
+        signal: abort.signal,
+      },
+    );
     const reader = response.body!.getReader();
     streamController?.enqueue(new TextEncoder().encode("through the stream\n"));
     await readUntil(reader, (value) => value.includes("through the stream"));
@@ -440,7 +449,92 @@ describe("SSE logs", () => {
 
   test("SSE without a name returns 400", async () => {
     const handle = start();
-    const response = await fetch(`${base(handle)}/events/logs`);
+    const response = await fetch(`${base(handle)}/events/logs?token=${handle.token}`);
     expect(response.status).toBe(400);
+  });
+
+  test("stream without token is refused and spawns nothing", async () => {
+    seedSandbox("demo");
+    const handle = start();
+    resetLog();
+    const response = await fetch(`${base(handle)}/events/logs?name=demo`);
+    expect(response.status).toBe(403);
+    await response.text();
+    expect(argvLog()).toBe("");
+  });
+
+  test("stream with a wrong token is refused", async () => {
+    seedSandbox("demo");
+    const handle = start();
+    resetLog();
+    const response = await fetch(`${base(handle)}/events/logs?name=demo&token=wrong`);
+    expect(response.status).toBe(403);
+    await response.text();
+    expect(argvLog()).toBe("");
+  });
+
+  test("read-only mode can stream but never mutate", async () => {
+    seedSandbox("demo");
+    const handle = start({
+      readOnly: true,
+      client: makeClient({
+        STUB_LOG_LINES: "1",
+        STUB_LOG_INTERVAL: "0.01",
+        STUB_LOG_KEEPALIVE: "0",
+      }),
+    });
+    const response = await fetch(
+      `${base(handle)}/events/logs?name=demo&token=${handle.token}`,
+    );
+    expect(response.status).toBe(200);
+    const text = await readUntil(response.body!.getReader(), (value) =>
+      value.includes("sandbox log line 0"),
+    );
+    expect(text).toContain("event: ready");
+
+    const mutation = await fetch(`${base(handle)}/api/sandboxes/demo/stop`, {
+      method: "POST",
+      headers: { "x-dashboard-token": handle.token ?? "" },
+    });
+    expect(mutation.status).toBe(403);
+    expect(phase("demo")).toBe("Ready");
+  });
+
+  test("an idle hub is dropped and a later stream starts clean", async () => {
+    seedSandbox("alpha");
+    seedSandbox("beta");
+    const handle = start({
+      client: makeClient({
+        STUB_LOG_LINES: "2",
+        STUB_LOG_INTERVAL: "0.01",
+        STUB_LOG_KEEPALIVE: "0",
+      }),
+    });
+
+    const first = new AbortController();
+    const firstResponse = await fetch(
+      `${base(handle)}/events/logs?name=alpha&token=${handle.token}`,
+      { signal: first.signal },
+    );
+    const firstText = await readUntil(
+      firstResponse.body!.getReader(),
+      (value) => value.includes("sandbox log line 1"),
+    );
+    expect(firstText).toContain("alpha");
+
+    first.abort();
+    const deadline = Date.now() + 2000;
+    while (handle.hubCount() > 0 && Date.now() < deadline) await Bun.sleep(10);
+    expect(handle.hubCount()).toBe(0);
+
+    // A later stream for another sandbox must not replay the old buffer.
+    const second = await fetch(
+      `${base(handle)}/events/logs?name=beta&token=${handle.token}`,
+    );
+    const replay = await readUntil(second.body!.getReader(), (value) =>
+      value.includes("sandbox log line 1"),
+    );
+    expect(replay).toContain("event: ready");
+    expect(replay).not.toContain("alpha");
   });
 });

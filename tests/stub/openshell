@@ -22,6 +22,10 @@
 #   STUB_DOWNLOAD_FIXTURE host directory whose contents are copied into the
 #                         `sandbox download` destination, simulating files
 #                         changed inside the sandbox
+#   STUB_JSON_COMPACT     "1" makes `sandbox list` and `sandbox provider list`
+#                         emit single-line compact JSON (no space after `:`)
+#   STUB_CREATE_RACE      "1" makes `sandbox create` register the sandbox in
+#                         state and then fail as if a concurrent run won
 
 set -eu
 
@@ -105,6 +109,14 @@ case $command_name in
                     exit 2
                 fi
                 mkdir -p "$sandboxes" "$providers"
+                if [ "${STUB_CREATE_RACE:-0}" = 1 ] && [ ! -e "$sandboxes/$sandbox_name" ]; then
+                    # A concurrent run won: the sandbox now exists, but this
+                    # create loses.
+                    printf 'Ready\n' > "$sandboxes/$sandbox_name"
+                    printf '%s\n' "$sandbox_providers" > "$providers/$sandbox_name"
+                    printf 'stub: sandbox %s already exists\n' "$sandbox_name" >&2
+                    exit 1
+                fi
                 if [ -e "$sandboxes/$sandbox_name" ]; then
                     printf 'stub: sandbox %s already exists\n' "$sandbox_name" >&2
                     exit 1
@@ -118,7 +130,13 @@ case $command_name in
                     printf 'stub: STUB_STATE_DIR is not set\n' >&2
                     exit 2
                 fi
-                printf '{\n  "next_page_token": "",\n  "sandboxes": ['
+                if [ "${STUB_JSON_COMPACT:-0}" = 1 ]; then
+                    stub_compact=1
+                    printf '{"next_page_token":"","sandboxes":['
+                else
+                    stub_compact=0
+                    printf '{\n  "next_page_token": "",\n  "sandboxes": ['
+                fi
                 stub_first=1
                 if [ -d "$sandboxes" ]; then
                     for stub_entry in "$sandboxes"/*; do
@@ -131,11 +149,19 @@ case $command_name in
                             printf ','
                         fi
                         stub_first=0
-                        printf '\n    {"id": "id-%s", "name": "%s", "workspace": "default", "labels": {}, "annotations": {}, "resource_version": 1, "created_at": "2026-01-01 00:00:00", "phase": "%s", "current_policy_version": 1, "exit_code": null, "conditions": []}' \
-                            "$stub_name" "$stub_name" "$stub_phase"
+                        if [ "$stub_compact" -eq 1 ]; then
+                            printf '{"name":"%s","phase":"%s"}' "$stub_name" "$stub_phase"
+                        else
+                            printf '\n    {"id": "id-%s", "name": "%s", "workspace": "default", "labels": {}, "annotations": {}, "resource_version": 1, "created_at": "2026-01-01 00:00:00", "phase": "%s", "current_policy_version": 1, "exit_code": null, "conditions": []}' \
+                                "$stub_name" "$stub_name" "$stub_phase"
+                        fi
                     done
                 fi
-                printf '\n  ]\n}\n'
+                if [ "$stub_compact" -eq 1 ]; then
+                    printf ']}\n'
+                else
+                    printf '\n  ]\n}\n'
+                fi
                 ;;
             start)
                 sandbox_name=${1:-}
@@ -187,7 +213,11 @@ case $command_name in
                 case $provider_action in
                     list)
                         sandbox_name=${1:-}
-                        printf '{\n  "next_page_token": "",\n  "providers": ['
+                        if [ "${STUB_JSON_COMPACT:-0}" = 1 ]; then
+                            printf '{"next_page_token":"","providers":['
+                        else
+                            printf '{\n  "next_page_token": "",\n  "providers": ['
+                        fi
                         stub_first=1
                         if [ -n "$state" ] && [ -f "$providers/$sandbox_name" ]; then
                             while IFS= read -r stub_provider; do
@@ -198,11 +228,19 @@ case $command_name in
                                     printf ','
                                 fi
                                 stub_first=0
-                                printf '\n    {"name": "%s", "type": "stub", "credential_keys": [], "config_keys": []}' \
-                                    "$stub_provider"
+                                if [ "${STUB_JSON_COMPACT:-0}" = 1 ]; then
+                                    printf '{"name":"%s","type":"stub"}' "$stub_provider"
+                                else
+                                    printf '\n    {"name": "%s", "type": "stub", "credential_keys": [], "config_keys": []}' \
+                                        "$stub_provider"
+                                fi
                             done < "$providers/$sandbox_name"
                         fi
-                        printf '\n  ]\n}\n'
+                        if [ "${STUB_JSON_COMPACT:-0}" = 1 ]; then
+                            printf ']}\n'
+                        else
+                            printf '\n  ]\n}\n'
+                        fi
                         ;;
                     attach)
                         sandbox_name=${1:-}

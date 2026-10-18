@@ -20,7 +20,13 @@ TOKEN_PORT=$((MAIN_PORT + 2))
 HOST_PORT=$((MAIN_PORT + 3))
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/dashboard-smoke.XXXXXX")
-trap 'stop_all; rm -rf "$WORK"' EXIT INT TERM
+cleanup() {
+    stop_all
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 STATE=$WORK/state
 CONFIG_HOME=$WORK/config
@@ -196,9 +202,11 @@ fi
 curl -s "$BASE/api/sandboxes/demo/rules?status=pending" >"$WORK/rules.json"
 assert_contains "rules list parses pending proposals" "$WORK/rules.json" '"chunkId":"chunk-pending-1"'
 
-curl -sN --max-time 5 "$BASE/events/logs?name=demo" >"$WORK/sse.txt" || true
+curl -sN --max-time 5 "$BASE/events/logs?name=demo&token=$TOKEN" >"$WORK/sse.txt" || true
 assert_contains "SSE stream sends ready event" "$WORK/sse.txt" "event: ready"
 assert_contains "SSE stream carries log lines" "$WORK/sse.txt" "stub] gateway log line 1"
+
+assert_status "stream without token is 403" 403 "$BASE/events/logs?name=demo"
 
 # ---------------------------------------------------------------------------
 # Mutations: token guard, lifecycle, create, rules

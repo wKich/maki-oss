@@ -82,7 +82,7 @@ Read routes (no token required on loopback):
 | `GET /api/sandboxes/:name` | Detail: policy source/revision, providers, revision list |
 | `GET /api/sandboxes/:name/policy?view=base\|full` | Base or effective policy |
 | `GET /api/sandboxes/:name/rules?status=pending` | Rule proposals parsed from `rule get` |
-| `GET /events/logs?name=:name` | SSE log stream (ring-buffer replay, heartbeat comments) |
+| `GET /events/logs?name=:name&token=:token` | SSE log stream (ring-buffer replay, heartbeat comments). Requires the page's session token |
 
 Mutating routes require the `X-Dashboard-Token` header and fail with 403 in
 read-only mode:
@@ -106,10 +106,15 @@ The dashboard is a local operator tool, not a hardened service. What it does:
 - **Loopback by default.** `127.0.0.1` only. Binding elsewhere is possible but
   requires an explicit token and prints a warning; there is no TLS in v1, so
   for remote access prefer an SSH tunnel to the loopback port.
-- **Session token on mutations.** A random token is minted at startup unless
-  `--token` is given, embedded in the served page, and required as
-  `X-Dashboard-Token`. Cross-site form posts cannot set that header, and no
+- **Session token on mutations and streams.** A random token is minted at
+  startup unless `--token` is given, embedded in the served page, and required
+  as `X-Dashboard-Token`. Cross-site form posts cannot set that header, and no
   CORS headers are served, so a malicious page cannot read responses either.
+- **Log streams require the page token.** `GET /events/logs` checks the token
+  as a `token` query parameter (the browser's `EventSource` cannot send
+  headers) and returns 403 without spawning a log process. Read-only mode
+  still mints a read token so the page can stream logs, but it continues to
+  reject every mutation.
 - **Read-only mode** for shared or demo machines: every mutation returns 403.
 - **Defense in depth in the browser.** The page carries a strict CSP
   (`script-src 'self'`, `default-src 'none'`), and the frontend renders gateway

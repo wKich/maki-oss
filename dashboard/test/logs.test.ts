@@ -47,7 +47,7 @@ function fakeProcess(): FakeProcess {
 
 function hubWith(
   factory: () => FakeProcess | Result<LogsProcess>,
-  options: { heartbeatMs?: number } = {},
+  options: { heartbeatMs?: number; onIdle?: () => void } = {},
 ): { hub: LogHub; spawned: FakeProcess[] } {
   const spawned: FakeProcess[] = [];
   const client = {
@@ -167,6 +167,39 @@ describe("LogHub", () => {
     );
     expect(text).toContain("openshell CLI not found");
     hub.stop();
+  });
+
+  test("reports idle once the last subscriber leaves and the child is dead", async () => {
+    let idle = 0;
+    const { hub, spawned } = hubWith(fakeProcess, { onIdle: () => (idle += 1) });
+
+    const a = hub.subscribe();
+    const b = hub.subscribe();
+    a.unsubscribe();
+    expect(idle).toBe(0);
+
+    b.unsubscribe();
+    expect(spawned[0]!.killed()).toBe(true);
+    expect(idle).toBe(1);
+
+    // Repeated disconnects must not fire the callback again.
+    b.unsubscribe();
+    hub.stop();
+    expect(idle).toBe(1);
+  });
+
+  test("reports idle when the tail exits on its own", async () => {
+    let idle = 0;
+    const { hub, spawned } = hubWith(fakeProcess, { onIdle: () => (idle += 1) });
+
+    const subscription = hub.subscribe();
+    const reader = subscription.stream.getReader();
+    spawned[0]!.end(0);
+    await readUntil(reader, (value) => value.includes("event: end"));
+    expect(idle).toBe(1);
+    subscription.unsubscribe();
+    hub.stop();
+    expect(idle).toBe(1);
   });
 
   test("ring buffer retains only the most recent lines", async () => {
