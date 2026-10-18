@@ -53,6 +53,8 @@ Maki, and downloads changes back into the project directory on exit.
   install, verify, and refresh the pinned plugin and skill copies.
 - [`docs/ai/agent-playbook.md`](docs/ai/agent-playbook.md) — ordered,
   executable steps for a coding agent.
+- [`docs/ai/host-playbook.md`](docs/ai/host-playbook.md) — agent-executable
+  host setup: bare machine to a daily-driver `maki-oss`.
 - [`docs/ai/references.md`](docs/ai/references.md) — curated upstream links,
   the only index of external documentation in this repository.
 

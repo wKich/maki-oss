@@ -6,6 +6,9 @@ this repository must preserve it.
 
 Start here:
 
+- `docs/ai/host-playbook.md` — provision a bare macOS or Linux host (engine,
+  OpenShell, Maki, shell) before running Maki; hands off to the agent
+  playbook for the sandbox phases.
 - `docs/ai/agent-playbook.md` — ordered, executable steps to build the image,
   load provider profiles, create a sandbox, and run Maki.
 - `docs/ai/references.md` — curated upstream documentation (OpenShell and
