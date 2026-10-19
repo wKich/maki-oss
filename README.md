@@ -1,10 +1,47 @@
-# maki-openshell
+# maki-oss
 
-Run [Maki](https://maki.sh) coding agents inside NVIDIA OpenShell sandboxes,
-fully isolated from the host system. The sandbox is the security boundary:
-filesystem access is confined with Landlock, egress is deny-by-default, and
-model credentials never enter the sandbox — the agent sees opaque placeholders
-that OpenShell's proxy resolves only at approved endpoints.
+**Your AI coding agent, locked in a sandbox.**
+
+Run [Maki](https://maki.sh) coding agents inside NVIDIA OpenShell sandboxes —
+fully isolated from your machine. The agent gets a real shell, your project
+files, and nothing else: filesystem access is confined with Landlock, egress is
+deny-by-default, and your model credentials never enter the sandbox. The agent
+sees opaque placeholders that OpenShell's proxy resolves only at approved
+endpoints.
+
+One command. From anywhere:
+
+```sh
+maki-oss provider setup        # once per machine: wizard for any provider
+cd ~/code/myproject
+maki-oss                       # ensure the sandbox, run Maki, sync back
+```
+
+That's it. Bare `maki-oss` creates or reuses the project's sandbox, uploads the
+project on first create, attaches remembered providers, launches Maki, and
+downloads every change back into your project directory on exit.
+`maki-oss run "<prompt>"` is the headless variant, and
+`maki-oss --continue` / `maki-oss --resume <ID>` pick up where the last
+session left off. Full reference: [`docs/helper.md`](docs/helper.md).
+
+## Why?
+
+Because giving an AI agent full run of your laptop is a bad idea, and running
+sandboxes by hand is a chore. maki-oss gives you:
+
+- 🔒 **Real isolation** — Landlock-confined filesystem, non-root sandbox user,
+  deny-by-default egress. Break-ins stay inside the box.
+- 🔑 **Zero credential exposure** — keys live in OpenShell provider profiles
+  on the host; the sandbox only ever sees placeholders.
+- 🧩 **Any provider** — a `provider setup` wizard plus a curated profile
+  catalog, with a migration guide for keys currently stored in Maki or
+  OpenCode.
+- 🔄 **Seamless file sync** — upload on create, download on exit. Your project
+  directory stays the source of truth.
+- 🐟 **Fish-native** — a fisher-compatible plugin with completions, plus a
+  plain POSIX `sh` helper for everyone else.
+- 📊 **Dashboard** — a minimal [Bun](https://bun.sh) web UI to monitor and
+  manage your OpenShell sandboxes.
 
 ## Status
 
@@ -14,8 +51,6 @@ All five changes are implemented and verified — evidence in
 [`openspec/`](openspec/); accepted plans are archived under
 `openspec/changes/archive/`.
 
-The five changes:
-
 | Change | Delivers |
 |---|---|
 | `add-maki-openshell-setup-guide` | Canonical setup guide, glossary, verifiable examples, AI-agent reference pack |
@@ -23,22 +58,6 @@ The five changes:
 | `add-openshell-bun-dashboard` | Minimal Bun web dashboard to monitor and manage OpenShell |
 | `add-any-provider-support` | `provider setup` wizard, curated profile catalog, credential-store migration guide |
 | `add-one-command-session` | Bare `maki-oss` session: ensure sandbox, upload on create, sync back on exit, provider/model memory |
-
-## Quick start
-
-```sh
-maki-oss provider setup        # once per machine: wizard for any provider
-cd ~/code/myproject
-maki-oss                       # ensure the sandbox, run Maki, sync back
-```
-
-Bare `maki-oss` creates or reuses the project's sandbox, uploads the project
-when the sandbox is first created, attaches remembered providers, launches
-Maki, and downloads changes back into the project directory on exit.
-`maki-oss run "<prompt>"` is the headless variant of the same flow, and
-`maki-oss --continue` / `maki-oss --resume <ID>` pick the conversation up
-where the last session in the sandbox left off. See
-[`docs/helper.md`](docs/helper.md) for the full reference.
 
 ## Guides
 
@@ -69,7 +88,7 @@ Canonical configuration lives under [`examples/`](examples/): the Maki image
 ([`examples/policies`](examples/policies)). The docs reference these files
 instead of copying them, so verification catches drift.
 
-## Target repo layout
+## Repo layout
 
 ```
 docs/       guides, glossary, verification checklist, AI reference pack
