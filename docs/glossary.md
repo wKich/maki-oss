@@ -31,9 +31,13 @@ reference pack.
   (`~/.local/state/maki/auth/<slug>.json`) or OpenCode's
   (`~/.local/share/opencode/auth.json`); the setup wizard scans these without
   printing values.
-- **Credential placeholder** — the opaque `openshell:resolve:env:<KEY>` value a
-  sandbox process receives instead of a real secret; the proxy substitutes the
-  real value only at endpoints the profile authorizes.
+- **Credential placeholder** — the opaque stand-in a sandbox process receives
+  instead of a real secret: a revision-scoped token that ends in `_<VARIABLE>`.
+  The proxy substitutes the real value only at endpoints the profile
+  authorizes. Its literal prefix is deliberately never written anywhere in this
+  repository: the proxy answers 403 to any request body containing it, the
+  agent sends loaded files in every request body, and one literal spelling in
+  a file Maki reads breaks every later request.
 - **Landlock** — the Linux security module OpenShell uses to confine sandbox
   processes to the filesystem paths the policy lists; it requires Landlock ABI
   v3 (Linux 6.2 or newer).

@@ -1752,6 +1752,28 @@ test_example_config() {
     assert_log_has "maki-minimal.yaml"
 }
 
+# The placeholder prefix is never written in this repository. OpenShell's proxy
+# answers 403 to any request body containing it, and Maki sends loaded context
+# in every request body, so one literal spelling in a file the agent reads
+# breaks every later request (AGENTS.md, "Never spell the placeholder").
+test_no_placeholder_spelling() {
+    begin "no agent-readable file spells the credential placeholder"
+    new_case placeholder-spelling
+    needle=$(printf 'openshell:resolve'':env:')
+    hits=
+    for f in "$ROOT/AGENTS.md" "$ROOT/README.md" "$ROOT/Makefile" \
+        "$ROOT/docs"/*.md "$ROOT/docs/ai"/*.md "$ROOT/examples"/*.toml \
+        "$ROOT/examples/providers"/*.yaml "$ROOT/examples/policies"/*.yaml; do
+        [ -f "$f" ] || continue
+        if grep -qF -- "$needle" "$f"; then
+            hits="$hits ${f#"$ROOT"/}"
+        fi
+    done
+    if [ -n "$hits" ]; then
+        bad "placeholder prefix spelled in:$hits (reword; see AGENTS.md)"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 
 run_test test_help
@@ -1823,6 +1845,7 @@ run_test test_fish_plugin
 run_test test_fish_fisher_layout
 run_test test_fish_completions
 run_test test_example_config
+run_test test_no_placeholder_spelling
 
 printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 if [ "$FAIL" -ne 0 ]; then

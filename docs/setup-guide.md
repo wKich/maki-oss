@@ -26,9 +26,9 @@ isolation does not depend on Maki's own permission system:
   tied to a binary path (`/usr/local/bin/maki`) and, for REST endpoints, to
   allowed methods and paths.
 - **Credentials.** The real API key stays in the gateway. The sandbox process
-  sees an opaque placeholder such as `openshell:resolve:env:ANTHROPIC_API_KEY`;
-  the proxy substitutes the real value only at endpoints the provider profile
-  authorizes. Maki never holds the key.
+  sees an opaque placeholder that ends in the variable name (for example
+  `..._ANTHROPIC_API_KEY`); the proxy substitutes the real value only at
+  endpoints the provider profile authorizes. Maki never holds the key.
 - **Process.** The workload runs as uid/gid 1500 (`sandbox`), never root, under
   seccomp filters.
 - **File transfer.** There are no host bind mounts. Project files move in and

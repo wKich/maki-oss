@@ -39,6 +39,31 @@ does not match is a mismatch — fix it in Phase 2 rather than skipping ahead.
 
 ## Phase 2 — Host tooling install
 
+### Host preconditions
+
+Two things a bare host must supply that no step below installs; check them
+first.
+
+**macOS — Homebrew.** The engine step installs through `brew`:
+
+```sh
+brew --version
+```
+
+If that fails, install Homebrew first (the installer is on the Homebrew
+homepage), then re-open the shell and re-check.
+
+**Linux — engine access for your user.** The engine must be runnable without
+root: either your user is in the docker group (adding it needs a full logout
+and login to take effect) or you use a rootless engine. Check the group:
+
+```sh
+id -nG | tr ' ' '\n' | grep -qx docker
+```
+
+An empty result means the group is missing — installing the engine package
+does not grant it. Rootless-engine users can skip this check.
+
 ### Container engine (Docker Engine 28+ or OrbStack)
 
 macOS (Homebrew):
@@ -82,8 +107,10 @@ maki --version
 The host Maki must be the release pinned by
 [`examples/maki-image/Dockerfile`](../../examples/maki-image/Dockerfile)
 (`ARG MAKI_VERSION`); Maki's [quick start](https://maki.sh/docs/quick-start/)
-covers other install options. Do not run `maki auth login` — model credentials
-go through OpenShell provider profiles (Phase 3), never Maki's own store.
+covers other install options. Never run `maki auth login` inside a sandbox
+(see the invariants below). On the host, sessions get model credentials from
+OpenShell provider profiles — Phase 3's wizard imports the key from wherever
+you keep it, including Maki's or OpenCode's own store.
 
 ### Verify
 
@@ -106,7 +133,9 @@ cd maki-openshell
 ```
 
 Run the executable preflight. On a fresh machine the image check fails until
-the next step builds it; every other line must read `ok`:
+the next step builds it; every other check must read `ok` — a `warn` line
+about a missing `jq` is harmless (`jq` is optional, see
+[`docs/helper.md`](../helper.md)):
 
 ```sh
 ./bin/maki-oss doctor
@@ -119,13 +148,18 @@ Build the sandbox image (bakes the pinned Maki release) and verify it:
 docker run --rm maki-agent:local maki --version
 ```
 
-Then the one-time provider wizard — it scans the Maki and OpenCode credential
-stores, lints and imports a profile, and creates the provider; the credential
-never appears in argv, output, or this repository:
+The one-time provider wizard needs one input: a model API key — exported in
+the environment, or already stored by Maki or OpenCode. It scans those
+credential stores, lints and imports a profile, and creates the provider; the
+credential never appears in argv, output, or this repository:
 
 ```sh
 ./bin/maki-oss provider setup
 ```
+
+Without a terminal, name the credential instead of waiting for prompts:
+`--from STORE --credential SLUG --yes`, `--env VAR`, or `--file PATH` — the
+full flag table is in [`docs/providers.md`](../providers.md).
 
 One provider is enough to start. To migrate a host that already holds many
 credentials — audit both stores, classify each slug, and re-sync after a key
@@ -153,17 +187,17 @@ Choose exactly one primary path per shell; verify it before moving on.
 export PATH="/absolute/path/to/maki-openshell/bin:$PATH"
 ```
 
-**fish** — install the plugin with fisher, from the repository root:
+**fish** — from the repository root, let the helper symlink its own function
+and completions. It needs no plugin manager and works before `maki-oss`
+resolves anywhere:
 
 ```sh
-fisher install ./fish
+./bin/maki-oss fish install
 ```
 
-Without fisher, the helper symlinks the function and completions itself:
-
-```sh
-maki-oss fish install
-```
+With fisher already installed, `fisher install ./fish` installs the same
+plugin; fisher copies the files instead of symlinking them, so put the
+repository's `bin/` on `PATH` (as for zsh) or set `MAKI_OSS_BIN` below.
 
 **Fallback:** if neither the `PATH` entry nor the fish function resolves the
 helper, set `MAKI_OSS_BIN` to the absolute path of this repository's
@@ -172,15 +206,23 @@ repository, then `PATH`.
 
 ### Verify
 
+POSIX shells (zsh, bash, …) — run this block:
+
 ```sh
-command -v maki-oss                        # zsh
-type -q maki-oss                           # fish
-ls ~/.config/fish/completions/maki-oss.fish  # fish completions
+command -v maki-oss
 ```
 
-Expected: `command -v maki-oss` (zsh) or `type -q maki-oss` (fish) resolves
-to this repository's `bin/maki-oss`, and the fish completion file exists.
-Stop on any mismatch.
+fish — run this block:
+
+```sh
+fish -c 'type -q maki-oss'                   # the fish function resolves
+ls ~/.config/fish/completions/maki-oss.fish  # completions installed
+```
+
+Expected: `command -v maki-oss` (POSIX) or the fish check resolves to this
+repository's `bin/maki-oss`, and the fish completion file exists. Run each
+block only in the shell it names — `type -q` is a fish builtin and errors
+under zsh and bash. Stop on any mismatch.
 
 ## Phase 5 — Daily driver
 
@@ -212,8 +254,10 @@ cd ~/code/myproject
 maki-oss status
 ```
 
-Expected: the project sandbox is reported with its phase and attached
-providers. Stop on any mismatch.
+Expected: `Exists: yes` with the project sandbox's phase and attached
+providers. `Exists: no` (with a non-zero exit) means no sandbox was created
+yet, or the loop's `rm` deleted it — run `maki-oss up` to create one, or
+`maki-oss` to start a session. Stop on any other mismatch.
 
 ### Handoff
 

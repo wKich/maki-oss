@@ -103,7 +103,7 @@ $ openshell sandbox exec -n maki --no-login-shell -- id
 uid=1500(sandbox) gid=1500(sandbox) groups=1500(sandbox)
 
 $ openshell sandbox exec -n maki --no-login-shell -- printenv ANTHROPIC_API_KEY
-openshell:resolve:env:v3789022262450335270_ANTHROPIC_API_KEY
+v3789022262450335270_ANTHROPIC_API_KEY
 
 $ openshell sandbox exec -n maki --no-login-shell -- ls /Users
 ls: cannot access '/Users': No such file or directory
@@ -118,9 +118,9 @@ touch: cannot touch '/usr/probe': Permission denied
 (exit 1)
 ```
 
-Note the placeholder is revision-scoped (`openshell:resolve:env:v<digits>_<KEY>`)
-in this OpenShell release; it still starts with the documented
-`openshell:resolve:env:` prefix. `/sandbox` was writable in a separate probe.
+Note the placeholder is revision-scoped — a `v<digits>_<KEY>` token in this
+OpenShell release — so its leading prefix is never quoted in this repository.
+`/sandbox` was writable in a separate probe.
 
 Effective policy and attachment:
 
@@ -187,7 +187,7 @@ written. Two notes for readers:
 - `openshell profile delete` needs `--global` to remove profiles imported with
   `--global`.
 - The placeholder's revision prefix (`v<digits>_`) makes exact-string checks
-  brittle; match the `openshell:resolve:env:` prefix.
+  brittle; match the `_<KEY>` suffix instead.
 
 ### Not verified
 

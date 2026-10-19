@@ -8,8 +8,8 @@ updates the provider instance; and can attach it to the project sandbox.
 
 Credential values never appear in argv, output, shell history, or files. The
 wizard exports the value only into the environment of the `openshell` child
-process, and the sandbox process still sees an opaque
-`openshell:resolve:env:<KEY>` placeholder.
+process, and the sandbox process still sees an opaque stand-in in place of the
+key (see the placeholder entry in [`docs/glossary.md`](glossary.md)).
 
 Upstream reference: the Maki provider docs and the OpenShell profile docs are
 indexed, with the versions this repository was verified against, in
@@ -23,7 +23,7 @@ credential-store slugs to profiles is
 |---|---|---|
 | **Profile** | Gateway, imported from `examples/providers/*.yaml` | A reusable definition: credential environment variable, endpoint hosts, allowed binaries |
 | **Provider** | Gateway (`openshell provider ...`) | An instance of one profile with your credential bound to it |
-| **Placeholder** | Sandbox process environment | `openshell:resolve:env:<KEY>` — the proxy substitutes the real value only at the profile's endpoints |
+| **Placeholder** | Sandbox process environment | The opaque stand-in the sandbox sees in place of the key — the proxy substitutes the real value only at the profile's endpoints |
 
 The profile also contributes the network policy that lets `/usr/local/bin/maki`
 reach the provider endpoint, so an attached provider is both a credential and
@@ -158,7 +158,7 @@ Inside the sandbox, confirm the placeholder (never the value):
 
 ```sh
 openshell sandbox exec -n maki --no-login-shell -- printenv OPENCODE_API_KEY
-# openshell:resolve:env:v..._OPENCODE_API_KEY
+# v3789022262450335270_OPENCODE_API_KEY   (a placeholder, never the key)
 ```
 
 `make lint-profiles` lints every `examples/providers/*.yaml` with the real

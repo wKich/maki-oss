@@ -27,11 +27,12 @@ The refusal also appears in the sandbox log (check 6).
 openshell sandbox exec -n maki --no-login-shell -- printenv ANTHROPIC_API_KEY
 ```
 
-**Expected:** output starts with `openshell:resolve:env:` — for example
-`openshell:resolve:env:v3789022262450335270_ANTHROPIC_API_KEY`. It must never
-start with `sk-ant-` or otherwise contain the real key. An empty value means
-the provider was attached after the process started; `sandbox exec` starts a
-new process, so verify the attachment with check 5 first.
+**Expected:** output is a gateway-issued placeholder, not a key: a
+revision-scoped token ending in `_ANTHROPIC_API_KEY` (for example
+`v3789022262450335270_ANTHROPIC_API_KEY`). It must never start with `sk-ant-`
+or otherwise contain the real key. An empty value means the provider was
+attached after the process started; `sandbox exec` starts a new process, so
+verify the attachment with check 5 first.
 
 ## 3. Host paths invisible
 

@@ -27,7 +27,13 @@ Never violate these, even to make a command succeed:
   `openshell sandbox upload` / `download`.
 - **No secrets through `--env`.** Model and service credentials go through
   OpenShell provider profiles (placeholder + proxy substitution); the sandbox
-  only ever sees `openshell:resolve:env:*` placeholders.
+  only ever sees an opaque stand-in, never the key.
+- **Never spell the placeholder.** OpenShell's proxy rejects any request body
+  containing the literal placeholder prefix with a 403, and Maki sends loaded
+  context — this file, any doc it opens, any shell output it echoes — in every
+  request body. One literal spelling in a file the agent reads breaks every
+  later request. Describe the placeholder in prose; never quote it here, in
+  `docs/`, or in any file the agent may load.
 - **Egress stays deny-by-default.** Every endpoint is an explicit policy or
   provider-profile decision; add the narrowest rule and never use `tls: skip`,
   `access: full`, or wildcard hosts to fix a denial.

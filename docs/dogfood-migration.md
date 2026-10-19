@@ -120,7 +120,7 @@ Inside a running sandbox the credential is still an opaque placeholder:
 
 ```sh
 openshell sandbox exec -n maki --no-login-shell -- printenv MINIMAX_API_KEY
-# openshell:resolve:env:..._MINIMAX_API_KEY
+# ..._MINIMAX_API_KEY   (a placeholder, never the key)
 ```
 
 ## 6. Re-sync after a rotation

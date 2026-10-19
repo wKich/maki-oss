@@ -148,8 +148,8 @@ If you need the provider behind an OAuth login:
 The migration path keeps the project's boundary intact:
 
 - **The credential lands in the gateway, not the sandbox.** The sandbox process
-  receives `openshell:resolve:env:<KEY>` and the proxy substitutes the real
-  value only at the profile's endpoints, for the profile's binary.
+  receives an opaque stand-in in place of the key, and the proxy substitutes
+  the real value only at the profile's endpoints, for the profile's binary.
 - **No credential in argv or on disk.** Values move through the child-process
   environment only; generated profiles contain configuration, never secrets,
   and the wizard never echoes a value.
