@@ -9,20 +9,58 @@ deny-by-default, and your model credentials never enter the sandbox. The agent
 sees opaque placeholders that OpenShell's proxy resolves only at approved
 endpoints.
 
-One command. From anywhere:
+## Install
+
+Prerequisites: OpenShell CLI with a running gateway (`openshell status`),
+Docker Engine 28+ (or Podman), and optionally `jq` and `fish`.
 
 ```sh
-maki-oss provider setup        # once per machine: wizard for any provider
+git clone https://github.com/wKich/maki-oss.git
+cd maki-oss
+./bin/maki-oss doctor       # verify prerequisites
+./bin/maki-oss image build  # build the sandbox image
+export PATH="$PWD/bin:$PATH"
+```
+
+Fish users can install the plugin with [fisher](https://github.com/jorgebucaran/fisher)
+instead — it bundles the function and completions.
+
+## Quick start
+
+```sh
+maki-oss provider setup     # once per machine: wizard for any provider
 cd ~/code/myproject
-maki-oss                       # ensure the sandbox, run Maki, sync back
+maki-oss                    # ensure the sandbox, run Maki, sync back
 ```
 
 That's it. Bare `maki-oss` creates or reuses the project's sandbox, uploads the
 project on first create, attaches remembered providers, launches Maki, and
-downloads every change back into your project directory on exit.
-`maki-oss run "<prompt>"` is the headless variant, and
-`maki-oss --continue` / `maki-oss --resume <ID>` pick up where the last
-session left off. Full reference: [`docs/helper.md`](docs/helper.md).
+downloads every change back into your project directory on exit. After the
+one-time `provider setup`, a project needs no further setup.
+
+## What do I send the agent?
+
+Anything you'd ask a coding agent — `maki-oss` just makes sure it runs inside
+the sandbox. Interactively, type your request at Maki's prompt as usual.
+Headless, pass it as an argument:
+
+```sh
+maki-oss run "explain this project and fix the failing tests"
+maki-oss run "review the last commit for bugs"
+maki-oss run --model deepseek/deepseek-chat "check the changelog"
+```
+
+Pick up where you left off:
+
+```sh
+maki-oss --continue              # resume the most recent session
+maki-oss --resume <ID>           # resume a specific session
+maki-oss run --resume <ID> "continue where the previous run stopped"
+```
+
+When the session ends, the sandbox's copy of your project is downloaded back
+into the project directory — your local files are always the source of truth.
+Full command reference: [`docs/helper.md`](docs/helper.md).
 
 ## Why?
 
@@ -40,24 +78,8 @@ sandboxes by hand is a chore. maki-oss gives you:
   directory stays the source of truth.
 - 🐟 **Fish-native** — a fisher-compatible plugin with completions, plus a
   plain POSIX `sh` helper for everyone else.
-- 📊 **Dashboard** — a minimal [Bun](https://bun.sh) web UI to monitor and
-  manage your OpenShell sandboxes.
-
-## Status
-
-All five changes are implemented and verified — evidence in
-[`docs/verification-log.md`](docs/verification-log.md) and
-[`dashboard/README.md`](dashboard/README.md). OpenSpec plans live under
-[`openspec/`](openspec/); accepted plans are archived under
-`openspec/changes/archive/`.
-
-| Change | Delivers |
-|---|---|
-| `add-maki-openshell-setup-guide` | Canonical setup guide, glossary, verifiable examples, AI-agent reference pack |
-| `add-maki-openshell-fish-helper` | `maki-oss` helper CLI (POSIX sh) + fisher-compatible fish plugin |
-| `add-openshell-bun-dashboard` | Minimal Bun web dashboard to monitor and manage OpenShell |
-| `add-any-provider-support` | `provider setup` wizard, curated profile catalog, credential-store migration guide |
-| `add-one-command-session` | Bare `maki-oss` session: ensure sandbox, upload on create, sync back on exit, provider/model memory |
+- 📊 **Dashboard** — a minimal [Bun](https://bun.sh) web UI
+  ([`dashboard/`](dashboard/)) to monitor and manage your OpenShell sandboxes.
 
 ## Guides
 
@@ -67,47 +89,9 @@ All five changes are implemented and verified — evidence in
   `provider setup` wizard, and custom profiles.
 - [`docs/migrating-providers.md`](docs/migrating-providers.md) — move keys out
   of Maki and OpenCode stores, and the OAuth limitation.
-- [`docs/dogfood-migration.md`](docs/dogfood-migration.md) — the audit →
-  migrate → verify loop run against a real host, and how to re-sync after a
-  key rotates.
 - [`docs/verification.md`](docs/verification.md) — isolation checklist with
   exact commands and expected output.
 - [`docs/glossary.md`](docs/glossary.md) — shared vocabulary for these docs.
-- [`docs/yagni.md`](docs/yagni.md) — project-local ponytail YAGNI ruleset:
-  install, verify, and refresh the pinned plugin and skill copies.
-- [`docs/ai/agent-playbook.md`](docs/ai/agent-playbook.md) — ordered,
-  executable steps for a coding agent.
-- [`docs/ai/host-playbook.md`](docs/ai/host-playbook.md) — agent-executable
-  host setup: bare machine to a daily-driver `maki-oss`.
-- [`docs/ai/references.md`](docs/ai/references.md) — curated upstream links,
-  the only index of external documentation in this repository.
-
-Canonical configuration lives under [`examples/`](examples/): the Maki image
-([`examples/maki-image`](examples/maki-image)), provider profiles
-([`examples/providers`](examples/providers)), and sandbox policies
-([`examples/policies`](examples/policies)). The docs reference these files
-instead of copying them, so verification catches drift.
-
-## Repo layout
-
-```
-docs/       guides, glossary, verification checklist, AI reference pack
-examples/   canonical image / provider / policy configs
-bin/        maki-oss helper
-fish/       fish function + completions
-dashboard/  Bun web dashboard
-scripts/    check-links.sh
-openspec/   OpenSpec specs and proposed changes
-```
-
-## Working with OpenSpec
-
-This project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec) configured
-for OpenCode (`.opencode/`):
-
-- `/opsx-propose "idea"` — create a change with proposal, specs, design, and tasks
-- `/opsx-apply` — implement an approved change
-- `openspec list`, `openspec view`, `openspec validate --all`
 
 ## Security invariants
 
