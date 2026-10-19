@@ -81,6 +81,9 @@ new_case() {
     CREDENTIAL_LOG=
     DOWNLOAD_EXIT=
     DOWNLOAD_FIXTURE=
+    SETTINGS_EXIT=
+    RULE_EXIT=
+    RULE_PENDING=
     JSON_COMPACT=
     CREATE_RACE=
     INTERACTIVE=
@@ -111,6 +114,9 @@ run_maki_with_input() { # STDIN_FILE ARGS...
         STUB_ENV_LOG="${CREDENTIAL_LOG:-}" \
         STUB_DOWNLOAD_EXIT="${DOWNLOAD_EXIT:-}" \
         STUB_DOWNLOAD_FIXTURE="${DOWNLOAD_FIXTURE:-}" \
+        STUB_SETTINGS_EXIT="${SETTINGS_EXIT:-}" \
+        STUB_RULE_EXIT="${RULE_EXIT:-}" \
+        STUB_RULE_PENDING="${RULE_PENDING:-}" \
         STUB_JSON_COMPACT="${JSON_COMPACT:-0}" \
         STUB_CREATE_RACE="${CREATE_RACE:-0}" \
         MAKI_OSS_SANDBOX_NAME="${ENV_NAME:-}" \
@@ -1525,6 +1531,242 @@ test_session_sync_merge() {
         || bad "host-only file was removed by the sync"
 }
 
+test_policy_advisor_enabled_on_session() {
+    begin "session ensure enables the policy advisor before Maki attaches"
+    new_case advisor-enable
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki maki
+    assert_rc 0
+    assert_log_has "settings"
+    assert_log_line "agent_policy_proposals_enabled"
+    assert_log_line "true"
+    assert_log_before "settings" "exec"
+}
+
+test_policy_advisor_enabled_on_fresh_create() {
+    begin "a freshly created sandbox also gets the advisor before exec"
+    new_case advisor-create
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_remembered_provider maki-stub
+
+    run_maki maki
+    assert_rc 0
+    assert_log_has "create"
+    assert_log_has "settings"
+    assert_log_before "create" "settings"
+    assert_log_before "settings" "exec"
+}
+
+test_policy_advisor_failure_is_soft() {
+    begin "advisor enable failure warns and the session still runs"
+    new_case advisor-softfail
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    SETTINGS_EXIT=1
+
+    run_maki maki
+    assert_rc 0
+    assert_err_has "policy advisor"
+    assert_log_has "exec"
+}
+
+test_policy_advisor_not_set_by_up() {
+    begin "explicit up never touches settings"
+    new_case advisor-up
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+
+    run_maki up
+    assert_rc 0
+    assert_log_missing "settings"
+}
+
+test_exit_surfaces_pending_proposals() {
+    begin "session exit surfaces pending network-rule proposals"
+    new_case advisor-exit
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    RULE_PENDING='Network Rules:  (version 3, 2 chunks)
+
+  Chunk: 2258b82a-8253-4094-bf5f-3e309b2b9c11
+  Status: pending
+
+  Chunk: 07d2d597-a043-40aa-bc47-21f0ae0d9971
+  Status: pending'
+
+    run_maki maki
+    assert_rc 0
+    assert_err_has "2 pending network-rule proposal"
+    assert_err_has "policy review"
+}
+
+test_exit_silent_when_no_proposals() {
+    begin "exit prints no policy note when nothing is pending"
+    new_case advisor-exit-empty
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki maki
+    assert_rc 0
+    assert_err_missing "pending network-rule proposal"
+}
+
+test_exit_surfaces_proposals_on_interrupt() {
+    begin "interrupted session still surfaces pending proposals"
+    new_case advisor-exit-int
+    if ! command -v pkill >/dev/null 2>&1; then
+        skipped "pkill is not installed"
+        return 0
+    fi
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    RULE_PENDING='Network Rules:  (version 3, 1 chunk)
+
+  Chunk: 2258b82a-8253-4094-bf5f-3e309b2b9c11
+  Status: pending'
+
+    # Run in the foreground so SIGINT is not ignored, then signal once the
+    # exec stub has started. The exit hook must still surface proposals.
+    (
+        sleep 2
+        pkill -INT -f "$MAKI maki" 2>/dev/null || true
+        sleep 3
+        pkill -KILL -f "$MAKI maki" 2>/dev/null || true
+    ) &
+    RC=0
+    PATH="$STUB_DIR:$PATH" \
+    HOME="$HOME" \
+    XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+    STUB_LOG="$STUB_LOG" \
+    STUB_STATE_DIR="$STUB_STATE_DIR" \
+    STUB_RULE_PENDING="$RULE_PENDING" \
+    STUB_EXEC_STDOUT='interrupted' \
+        "$MAKI" maki >"$OUT" 2>"$ERR" </dev/null || RC=$?
+    wait || true
+    assert_err_has "1 pending network-rule proposal"
+}
+
+test_exit_rule_failure_keeps_exit_code() {
+    begin "an unavailable rule command never masks Maki's exit code"
+    new_case advisor-exit-rulefail
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    EXEC_EXIT=5
+    RULE_EXIT=1
+
+    run_maki run "boom"
+    assert_rc 5
+    assert_err_missing "pending network-rule proposal"
+}
+
+test_policy_review_empty() {
+    begin "policy review reports an empty inbox and exits zero"
+    new_case policy-review-empty
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki policy review
+    assert_rc 0
+    assert_log_has "rule"
+    assert_log_line "pending"
+    assert_log_line "maki-myproject"
+}
+
+test_policy_review_lists_chunks() {
+    begin "policy review passes through pending chunk text"
+    new_case policy-review-list
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    RULE_PENDING='Network Rules:  (version 3, 1 chunk)
+
+  Chunk: 2258b82a-8253-4094-bf5f-3e309b2b9c11
+  Status: pending'
+
+    run_maki policy review
+    assert_rc 0
+    assert_out_has "2258b82a-8253-4094-bf5f-3e309b2b9c11"
+}
+
+test_policy_approve_non_tty_requires_yes() {
+    begin "policy approve refuses without --yes when stdin is not a TTY"
+    new_case policy-approve-notty
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki policy approve 2258b82a
+    assert_rc 1
+    assert_err_has "--yes"
+    assert_log_missing "approve"
+}
+
+test_policy_approve_with_yes_targets_one_chunk() {
+    begin "policy approve --yes approves exactly one chunk id"
+    new_case policy-approve-yes
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki policy approve 2258b82a --yes
+    assert_rc 0
+    assert_log_has "approve"
+    assert_log_line "--chunk-id"
+    assert_log_line "2258b82a"
+    assert_log_missing "approve-all"
+}
+
+test_policy_reject_requires_reason() {
+    begin "policy reject without --reason is a usage error"
+    new_case policy-reject-noreason
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki policy reject 2258b82a
+    assert_rc 1
+    assert_err_has "--reason"
+    assert_log_missing "reject"
+}
+
+test_policy_reject_passes_reason() {
+    begin "policy reject forwards the reason to the agent"
+    new_case policy-reject-reason
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki policy reject 2258b82a --reason "Scope this to docs/ paths only."
+    assert_rc 0
+    assert_log_has "reject"
+    assert_log_line "--chunk-id"
+    assert_log_line "2258b82a"
+    assert_log_line "--reason"
+    assert_log_line "Scope this to docs/ paths only."
+}
+
 test_no_jq_fallback() {
     begin "sandbox parsing works without jq"
     new_case no-jq
@@ -1838,6 +2080,20 @@ run_test test_session_model_precedence
 run_test test_session_no_sync
 run_test test_session_sync_failure_preserves_code
 run_test test_session_sync_merge
+run_test test_policy_advisor_enabled_on_session
+run_test test_policy_advisor_enabled_on_fresh_create
+run_test test_policy_advisor_failure_is_soft
+run_test test_policy_advisor_not_set_by_up
+run_test test_exit_surfaces_pending_proposals
+run_test test_exit_silent_when_no_proposals
+run_test test_exit_surfaces_proposals_on_interrupt
+run_test test_exit_rule_failure_keeps_exit_code
+run_test test_policy_review_empty
+run_test test_policy_review_lists_chunks
+run_test test_policy_approve_non_tty_requires_yes
+run_test test_policy_approve_with_yes_targets_one_chunk
+run_test test_policy_reject_requires_reason
+run_test test_policy_reject_passes_reason
 run_test test_no_jq_fallback
 run_test test_no_jq_attached_providers
 run_test test_missing_policy_dependency

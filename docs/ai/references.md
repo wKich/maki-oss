@@ -35,6 +35,7 @@ How to use this pack:
 | Default policy: fallback policy and baseline filesystem paths | [Default policy](https://docs.nvidia.com/openshell/how-it-works/policies/default-policy.md) | v0.1.2 |
 | Policy advisor: agent-proposed network rules | [Policy advisor](https://docs.nvidia.com/openshell/how-it-works/policies/advisor.md) | v0.1.2 |
 | Policy prover: boundary checks with `openshell-prover` | [Policy prover](https://docs.nvidia.com/openshell/how-it-works/policies/prover.md) | v0.1.2 |
+| Sandbox upload / download: gitignore filtering, symlink handling | [Manage sandboxes](https://docs.nvidia.com/openshell/how-it-works/sandboxes/overview.md) | v0.1.2 |
 | Inference: attach model providers and call native endpoints | [Inference](https://docs.nvidia.com/openshell/how-it-works/inference.md) | v0.1.2 |
 | Security best practices: Landlock, seccomp, network namespace, credentials | [Security best practices](https://docs.nvidia.com/openshell/security/best-practices.md) | v0.1.2 |
 | Accessing logs: CLI, TUI, OCSF events, denial lines | [Accessing logs](https://docs.nvidia.com/openshell/observability/accessing-logs.md) | v0.1.2 |
@@ -46,6 +47,14 @@ How to use this pack:
 | Docs MCP endpoint for AI clients (no `.md` variant; answers GET, not HEAD) | [OpenShell docs MCP server](https://docs.nvidia.com/openshell/_mcp/server) | v0.1.2 |
 | Install script used by the setup guide | [OpenShell install.sh](https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh) | v0.1.2 |
 | Source repository | [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) | v0.1.2 |
+
+**Verification baseline — `maki-oss policy review` was built against OpenShell
+v0.1.2**, where `openshell rule get` emits human-readable text only and has no
+JSON output mode. The helper therefore parses `Chunk:` lines from that text to
+count pending proposals; the `policy review` command itself is a plain
+passthrough, so its displayed output never depends on the parser. Upstream docs
+may describe newer behavior (JSON output, other fields); when the gateway floor
+rises, swap the text parse for JSON without changing behavior.
 
 ## Maki
 

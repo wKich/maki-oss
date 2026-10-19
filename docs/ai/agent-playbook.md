@@ -104,6 +104,21 @@ changed later with `openshell policy set`.
 
 Decision point C — is there a project to upload?
 
+Before uploading, make the project a git repo with its dependency directories
+gitignored. `openshell sandbox upload` applies `.gitignore` filtering only
+inside a git work tree and warns when it uploads everything, so an un-ignored
+`.venv`, `node_modules`, or `target` directory is copied into the sandbox at
+full size and dragged back by the exit sync — a macOS `.venv` round-tripped
+491 MB of useless, non-executable files into a Linux sandbox once. Ignore the
+dependency directories so the upload carries only the source.
+
+```sh
+cd "$PROJECT_PATH"
+git init
+printf '.venv/\nnode_modules/\ntarget/\n__pycache__/\n' >>.gitignore
+git add -A && git commit -qm init
+```
+
 ```sh
 # With a project (uploads require the create command to have no trailing
 # main command; Maki is launched later with sandbox exec):

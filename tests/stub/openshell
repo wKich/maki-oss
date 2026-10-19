@@ -26,6 +26,10 @@
 #                         emit single-line compact JSON (no space after `:`)
 #   STUB_CREATE_RACE      "1" makes `sandbox create` register the sandbox in
 #                         state and then fail as if a concurrent run won
+#   STUB_SETTINGS_EXIT    exit code for `settings` (default: 0)
+#   STUB_RULE_EXIT        exit code for `rule` (default: 0)
+#   STUB_RULE_PENDING     text printed by `rule get --status pending`; the
+#                         default prints a header with zero chunks
 
 set -eu
 
@@ -389,6 +393,26 @@ case $command_name in
         ;;
     policy)
         printf 'stub policy\n'
+        ;;
+    settings)
+        # argv already logged; simulate a gateway that rejects the advisor
+        # key so the fail-soft path is exercised.
+        if [ "${STUB_SETTINGS_EXIT:-0}" -ne 0 ]; then
+            printf 'stub: settings unsupported\n' >&2
+            exit "${STUB_SETTINGS_EXIT}"
+        fi
+        printf 'stub: settings ok\n'
+        ;;
+    rule)
+        if [ "${STUB_RULE_EXIT:-0}" -ne 0 ]; then
+            printf 'stub: rule unavailable\n' >&2
+            exit "${STUB_RULE_EXIT}"
+        fi
+        if [ -n "${STUB_RULE_PENDING:-}" ]; then
+            printf '%s\n' "$STUB_RULE_PENDING"
+        else
+            printf 'Network Rules:  (version 1, 0 chunks)\n\n'
+        fi
         ;;
     logs)
         printf 'stub log line\n'

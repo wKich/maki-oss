@@ -247,6 +247,25 @@ changes back into the project directory on exit (`--no-sync` opts out). A
 reused sandbox is not re-uploaded — run `maki-oss upload` first to refresh it
 from the current host tree. Full reference: [`docs/helper.md`](../helper.md).
 
+Every session enables the in-sandbox policy advisor and, on the way out,
+checks for pending network-rule proposals. If the agent asked for an endpoint
+that was denied, or OpenShell auto-drafted a rule from a blocked connection,
+the helper prints a note with the count and how to review it:
+
+```sh
+maki-oss policy review                 # list pending proposals with verdicts
+maki-oss policy approve <chunk-id>     # grant exactly that one (confirms first)
+maki-oss policy reject <chunk-id> --reason "Scope this to docs/ paths only."
+```
+
+Approvals never happen on their own — the helper has no bulk or automatic
+approval, so deny-by-default is unchanged. An agent that submitted a proposal
+waits for your decision, so approving mid-session lets it retry the same
+request in the same session; rejecting sends your reason back so it can narrow
+or stop. Keep every project a git repo with its dependency directories
+gitignored (see the agent playbook) so uploads stay small and the exit sync
+never drags a `.venv` or `node_modules` back into the host tree.
+
 ### Verify
 
 ```sh

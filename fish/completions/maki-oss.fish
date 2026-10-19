@@ -27,6 +27,9 @@ complete -c maki-oss -n '__fish_seen_subcommand_from image' -a build -d 'Build t
 complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a show -d 'Show the policy'
 complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a edit -d 'Edit the policy file'
 complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a apply -d 'Apply the policy file'
+complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a review -d 'List pending network-rule proposals'
+complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a approve -d 'Approve one proposal (confirmation required)'
+complete -c maki-oss -n '__fish_seen_subcommand_from policy' -a reject -d 'Reject one proposal (--reason sent to the agent)'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a add -d 'Create a provider'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a attach -d 'Attach a provider to the sandbox'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a list -d 'List providers on the gateway'
@@ -60,6 +63,7 @@ complete -c maki-oss -l full -d 'Include the effective policy'
 complete -c maki-oss -l base -d 'Show the base policy'
 complete -c maki-oss -l global -d 'Use the gateway-global policy'
 complete -c maki-oss -l wait -d 'Wait for the change to apply'
+complete -c maki-oss -l reason -r -d 'Rejection reason for policy reject (sent to the agent)'
 
 # provider options.
 complete -c maki-oss -l type -r -a 'maki-anthropic maki-openrouter maki-deepseek maki-synthetic maki-openai maki-google maki-mistral maki-xai maki-zai maki-zai-coding maki-opencode maki-opencode-go' -d 'Provider profile type'

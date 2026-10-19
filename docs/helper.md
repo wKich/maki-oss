@@ -256,6 +256,42 @@ maki-oss policy edit
 maki-oss policy apply --wait
 ```
 
+### policy review / approve / reject
+
+Act on network-rule proposals. A proposal is filed two ways: the in-sandbox
+policy advisor lets an agent ask for an endpoint it was denied and wait for
+your decision, and OpenShell auto-drafts one from any connection the policy
+blocks. Neither ever takes effect on its own — you are the only approver, and
+there is deliberately no bulk or automatic approval.
+
+`review` prints the project sandbox's pending proposals (chunk id, rule name,
+binary, endpoint, and the prover verdict), or reports an empty inbox and exits
+zero. `approve` confirms the exact chunk id before sending it, and requires
+`--yes` when stdin is not a TTY. `reject` requires `--reason`, which the agent
+receives so it can narrow the request.
+
+```sh
+maki-oss policy review
+maki-oss policy approve 2258b82a-8253-4094-bf5f-3e309b2b9c11
+maki-oss policy approve 2258b82a-8253-4094-bf5f-3e309b2b9c11 --yes
+maki-oss policy reject 2258b82a-8253-4094-bf5f-3e309b2b9c11 --reason "Scope this to docs/ paths only."
+```
+
+Every session that launches Maki also checks for proposals on the way out. If
+any are pending, the helper prints a stderr note with the count and the
+`policy review` command, so a denial never disappears silently. The check is
+fail-soft: an unreachable gateway or an older `openshell` without `rule`
+never masks Maki's exit code, and nothing is printed when the inbox is empty
+or on the `--no-sync` path.
+
+Read the prover line before approving. `no new findings` is an ordinary
+request; a named finding (`l7_bypass_credentialed`,
+`credential_reach_expansion`, `link_local_reach`) is a security signal and
+deserves a reject or a much narrower re-ask. Approving a host that resolves
+to a private address is accepted but stays blocked by the SSRF guard, so a
+proposal can be approved and still not work — the review output's endpoint
+and protocol tell you which case you are in.
+
 ### provider add / attach / list
 
 `add` creates a provider. Credentials are captured from the environment with
@@ -397,6 +433,22 @@ directory, so with fisher put the repository's `bin/` on `PATH` or set
 
 The test suite (`make test`) covers every command above with a stubbed
 OpenShell binary, so it runs without Docker, a gateway, or network access.
+
+## Known limitations
+
+Two boundaries are deliberate deferrals, recorded in the
+`add-policy-review-loop` change record rather than left as surprises:
+
+- **Sandbox `$HOME` writes are not synced back.** Only the workdir
+  (`/sandbox/project`) is downloaded on exit. An agent that writes to its own
+  home inside the sandbox — a tool whose convention is `~/.config/...`, for
+  example — leaves that file behind when the session ends. Tell the agent to
+  put deliverables under the project directory, or copy the file out by hand.
+- **Sandbox-created large artifacts are not filtered on download.** The exit
+  sync merges the whole workdir back, so a build directory, model weights, or
+  cache an agent creates in the sandbox is copied to the host at full size.
+  Gitignore filtering on upload only prevents host-side dependency
+  directories from entering; it does not catch files born inside the sandbox.
 
 ## Manual verification
 

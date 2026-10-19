@@ -75,6 +75,9 @@ Commands:
   start, stop                   Start or stop the sandbox
   rm [--yes]                    Delete the sandbox (confirmation required)
   policy show|edit|apply        Work with the sandbox policy
+  policy review                 List pending network-rule proposals
+  policy approve CHUNK_ID       Approve one proposal (confirmation required)
+  policy reject CHUNK_ID        Reject one proposal (--reason sent to agent)
   provider add|attach|list      Work with provider credentials
   provider setup                Set up a provider from a stored or generic key
   fish install|uninstall        Install or remove the fish plugin
@@ -103,7 +106,8 @@ Common options:
   --session-id ID  Session commands: write the run under a chosen session id
   --no-sync        Session commands: skip the download back to the host on
                    exit (default: download the project and merge it in)
-  --yes            Skip confirmation prompts (rm, policy set, provider setup)
+  --yes            Skip confirmation prompts (rm, policy approve, policy set,
+                    provider setup)
   --from STORE     provider setup credential store: maki or opencode
   --file PATH      provider setup JSON credential file
   --field PATH     Field path to read from --file (default: .api_key)
@@ -112,6 +116,7 @@ Common options:
   --no-attach      provider setup: never attach, even interactively
   --tail, --since, --source, --level, -n  Options for logs
   --full, --base   Options for policy show
+  --reason TEXT    Reason for policy reject (sent to the agent)
   --type, --credential, --config, --from-existing, --runtime-credentials,
   --global-profile  Options for provider add (provider setup uses
                    --credential as the store slug)
@@ -535,6 +540,33 @@ attached_providers() {
 # Safety checks
 # ---------------------------------------------------------------------------
 
+# Enables the in-sandbox policy advisor so an agent that hits a denied network
+# request can submit a proposal and wait for the human decision. Fail-soft: a
+# gateway without the key must not abort the session, so this warns and returns
+# rather than dying.
+enable_policy_advisor() { # NAME
+    advisor_name=$1
+    if ! os settings set "$advisor_name" --key agent_policy_proposals_enabled --value true >/dev/null 2>&1; then
+        warn "could not enable the policy advisor on '$advisor_name'; agents cannot request network access"
+        return 1
+    fi
+    return 0
+}
+
+# Prints the number of pending network-rule proposals, or nothing when the
+# gateway or `rule` subcommand is unavailable. Only the `Chunk:` lines count,
+# so a formatted header or a "no chunks" body yields zero.
+# shellcheck disable=SC2329  # called by sync_project_back
+pending_proposals_count() { # NAME
+    pc_name=$1
+    pc_json=''
+    pc_json=$(os rule get "$pc_name" --status pending 2>/dev/null) || return 0
+    [ -n "$pc_json" ] || return 0
+    pc_count=$(printf '%s\n' "$pc_json" | grep -c '^  Chunk: ' 2>/dev/null) || pc_count=0
+    [ -n "$pc_count" ] || pc_count=0
+    printf '%s' "$pc_count"
+}
+
 # Mirrors OpenShell's own heuristic: a credential-like key contains one of
 # these underscore-separated segments (API_KEY and friends span two segments).
 credential_like() {
@@ -855,9 +887,25 @@ sync_project_back() {
     os sandbox download "$sync_name" "$sync_workdir" "$PWD" >&2 || sync_rc=$?
     if [ "$sync_rc" -ne 0 ]; then
         warn "download failed (exit status $sync_rc); local files were left unchanged"
-        return 0
+    else
+        note "Synced sandbox changes back to $PWD."
     fi
-    note "Synced sandbox changes back to $PWD."
+    announce_pending_proposals "$sync_name"
+    return 0
+}
+
+# After a session, surface any network-rule proposals the agent filed so a
+# denial never disappears silently. Fail-soft: the count or the `rule`
+# subcommand may be unavailable, and that must not mask Maki's exit code.
+# shellcheck disable=SC2329  # called by sync_project_back
+announce_pending_proposals() { # NAME
+    app_name=$1
+    app_count=''
+    app_count=$(pending_proposals_count "$app_name" 2>/dev/null) || app_count=''
+    case $app_count in
+        ''|0) return 0 ;;
+    esac
+    note "$app_count pending network-rule proposal(s) for '$app_name'. Review: $PROGRAM policy review"
     return 0
 }
 
@@ -1007,6 +1055,10 @@ ensure_project_sandbox() {
         set -- "$@" "$name" . "$workdir"
         run_gateway "$@"
     fi
+    # Enable the advisor before Maki attaches so the agent can submit a
+    # network-rule proposal and wait for a human decision. Covers both the
+    # created and reused paths; `up` never reaches this function.
+    enable_policy_advisor "$name" || true
     ensure_attach_missing "$name"
 }
 
@@ -1264,6 +1316,58 @@ cmd_policy_apply() {
     fi
     run_gateway "$@"
     say "Policy applied from '$policy'."
+}
+
+# `maki-oss policy review|approve|reject` act on network-rule proposals the
+# agent filed (via the policy advisor) or OpenShell drafted from a denial.
+# They are thin passthroughs to `openshell rule`; the human stays the only
+# approver and there is deliberately no bulk or automatic approval.
+
+cmd_policy_review() {
+    [ "$#" -eq 0 ] || die_usage "policy review takes no arguments"
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    run_gateway rule get "$name" --status pending
+}
+
+cmd_policy_approve() {
+    [ "$#" -eq 1 ] || die_usage "usage: maki-oss policy approve CHUNK_ID [--yes]"
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    chunk_id=$1
+    if [ "$opt_yes" -eq 0 ]; then
+        if [ -t 0 ]; then
+            printf "Approve proposal %s on '%s'? [y/N] " "$chunk_id" "$name"
+            read -r answer || answer=
+            case $answer in
+                y|Y|yes|YES) ;;
+                *)
+                    say "Aborted."
+                    exit "$EX_USAGE"
+                    ;;
+            esac
+        else
+            err "refusing to approve proposal '$chunk_id': stdin is not a terminal; pass --yes"
+            exit "$EX_USAGE"
+        fi
+    fi
+    run_gateway rule approve "$name" --chunk-id "$chunk_id"
+    say "Approved proposal '$chunk_id' on '$name'."
+}
+
+cmd_policy_reject() {
+    [ "$#" -eq 1 ] || die_usage "usage: maki-oss policy reject CHUNK_ID --reason \"<text>\""
+    require_openshell
+    name=$(resolved_name)
+    require_sandbox "$name"
+    chunk_id=$1
+    if [ -z "$opt_reason" ]; then
+        die_usage "policy reject requires --reason (the agent receives it and can narrow its request)"
+    fi
+    run_gateway rule reject "$name" --chunk-id "$chunk_id" --reason "$opt_reason"
+    say "Rejected proposal '$chunk_id' on '$name'."
 }
 
 cmd_provider_add() {
@@ -2335,6 +2439,7 @@ opt_allow_env=
 opt_credentials=
 opt_configs=
 opt_yes=0
+opt_reason=
 opt_full=0
 opt_base=0
 opt_global=0
@@ -2548,6 +2653,12 @@ while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
             OPT_I=$((OPT_I + 1))
             ;;
         --yes) opt_yes=1 ;;
+        --reason)
+            [ "$#" -gt 0 ] || die_usage "option --reason requires a value"
+            opt_reason=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
         --full) opt_full=1 ;;
         --base) opt_base=1 ;;
         --global) opt_global=1 ;;
@@ -2644,7 +2755,7 @@ case $cmd in
         ;;
     policy)
         if [ "$#" -eq 0 ]; then
-            die_usage "policy requires a subcommand: show, edit, apply"
+            die_usage "policy requires a subcommand: show, edit, apply, review, approve, reject"
         fi
         sub=$1
         shift
@@ -2652,6 +2763,9 @@ case $cmd in
             show) cmd_policy_show "$@" ;;
             edit) cmd_policy_edit "$@" ;;
             apply) cmd_policy_apply "$@" ;;
+            review) cmd_policy_review "$@" ;;
+            approve) cmd_policy_approve "$@" ;;
+            reject) cmd_policy_reject "$@" ;;
             *) die_usage "unknown policy subcommand: $sub" ;;
         esac
         ;;
