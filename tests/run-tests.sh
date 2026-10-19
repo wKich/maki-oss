@@ -368,6 +368,10 @@ test_usage_errors() {
     assert_rc 1
     assert_err_has "option --resume requires a value"
     reset_log
+    run_maki maki -r
+    assert_rc 1
+    assert_err_has "option -r requires a value"
+    reset_log
     run_maki maki --resume ""
     assert_rc 1
     assert_err_has "option --resume requires a non-empty value"
@@ -1210,6 +1214,19 @@ test_maki_resume() {
     # inside the sandbox.
     assert_log_line "/sandbox/project"
     assert_log_missing "/.local/state"
+
+    # -c and -r are aliases for --continue and --resume.
+    reset_log
+    run_maki maki -c
+    assert_rc 0
+    assert_log_line "--continue"
+
+    reset_log
+    run_maki run -r CgADMGeR7WnHDw7NJRUfN "keep going"
+    assert_rc 0
+    assert_log_line "--resume"
+    assert_log_line "CgADMGeR7WnHDw7NJRUfN"
+    assert_log_before "--resume" "keep going"
 }
 
 test_run_resume_flags() {
@@ -1261,6 +1278,12 @@ test_session_flag_conflicts() {
     assert_err_has "--continue cannot be combined with --resume"
     assert_log_missing "exec"
     assert_log_missing "create"
+
+    reset_log
+    run_maki maki -c -r CgADMGeR7WnHDw7NJRUfN
+    assert_rc 1
+    assert_err_has "--continue cannot be combined with --resume"
+    assert_log_missing "exec"
 
     reset_log
     run_maki status --continue

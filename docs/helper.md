@@ -147,14 +147,15 @@ merges: matching files are overwritten and host-only files are never deleted.
 `--no-sync` skips it. `--model provider/model` (or the config `model` key)
 selects the model.
 
-Three session flags are forwarded to Maki unchanged: `--continue` resumes the
-most recent session in the sandbox workdir, `--resume <ID>` resumes a
-specific session, and `--session-id <ID>` writes the run under a chosen id.
-`--continue` together with `--resume` is a usage error. Maki validates ids as
-base58, so characters like `-` and `0` are rejected by Maki itself, not by the
-helper. On commands that do not launch Maki the flags are accepted and
-ignored, like `--model`. Maki's own flag semantics are documented in the
-upstream reference pack ([`docs/ai/references.md`](ai/references.md)).
+Three session flags are forwarded to Maki unchanged: `--continue` (`-c`)
+resumes the most recent session in the sandbox workdir, `--resume <ID>`
+(`-r <ID>`) resumes a specific session, and `--session-id <ID>` writes the run
+under a chosen id. `--continue` together with `--resume` is a usage error.
+Maki validates ids as base58, so characters like `-` and `0` are rejected by
+Maki itself, not by the helper. On commands that do not launch Maki the flags
+are accepted and ignored, like `--model`. Maki's own flag semantics are
+documented in the upstream reference pack
+([`docs/ai/references.md`](ai/references.md)).
 
 Sessions live in the sandbox's container filesystem, not on the host: they
 survive `stop` and `start`, but are lost when the sandbox is deleted and

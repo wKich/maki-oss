@@ -95,10 +95,11 @@ Common options:
                    for provider setup, the host variable name to read
   --allow-env KEY  Allow a credential-like key passed with --env (repeatable)
   --model SPEC     Model for sessions and run (provider/model)
-  --continue       Session commands: resume the most recent session in the
+  --continue (-c)  Session commands: resume the most recent session in the
                     sandbox workdir (sessions live in the sandbox: they
                     survive stop/start, but not deletion of the sandbox)
-  --resume ID      Session commands: resume a specific session by id
+  --resume ID (-r ID)
+                    Session commands: resume a specific session by id
   --session-id ID  Session commands: write the run under a chosen session id
   --no-sync        Session commands: skip the download back to the host on
                    exit (default: download the project and merge it in)
@@ -2376,7 +2377,7 @@ OPT_ARGC=$#
 # a trailing --resume/--session-id before that rotation starts.
 for opt_trailing in "$@"; do :; done
 case ${opt_trailing:-} in
-    --resume) die_usage "option --resume requires a value" ;;
+    --resume|-r) die_usage "option $opt_trailing requires a value" ;;
     --session-id) die_usage "option --session-id requires a value" ;;
 esac
 OPT_I=0
@@ -2499,12 +2500,12 @@ while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
             shift
             OPT_I=$((OPT_I + 1))
             ;;
-        --continue)
+        -c|--continue)
             opt_continue=1
             ;;
-        --resume)
-            [ "$#" -gt 0 ] || die_usage "option --resume requires a value"
-            [ -n "$1" ] || die_usage "option --resume requires a non-empty value"
+        -r|--resume)
+            [ "$#" -gt 0 ] || die_usage "option $OPT requires a value"
+            [ -n "$1" ] || die_usage "option $OPT requires a non-empty value"
             opt_resume=$1
             shift
             OPT_I=$((OPT_I + 1))
