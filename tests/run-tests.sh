@@ -346,6 +346,10 @@ test_help() {
     assert_out_has "Usage:"
     assert_out_has "doctor"
     assert_out_has "provider add|attach|list"
+    assert_out_has "--continue"
+    assert_out_has "--resume"
+    assert_out_has "--session-id"
+    assert_out_has "survive stop/start"
 }
 
 test_usage_errors() {
@@ -360,6 +364,17 @@ test_usage_errors() {
     reset_log
     run_maki download
     assert_log_missing "download"
+    run_maki maki --resume
+    assert_rc 1
+    assert_err_has "option --resume requires a value"
+    reset_log
+    run_maki maki --resume ""
+    assert_rc 1
+    assert_err_has "option --resume requires a non-empty value"
+    run_maki run --session-id
+    assert_rc 1
+    assert_err_has "option --session-id requires a value"
+    assert_log_missing "exec"
 }
 
 test_config_precedence() {
@@ -1177,6 +1192,83 @@ test_run_model_flag() {
     assert_log_line "check"
 }
 
+test_maki_resume() {
+    begin "maki --continue forwards the resume flag and syncs the workspace"
+    new_case maki-resume
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki maki --continue
+    assert_rc 0
+    assert_log_line "--tty"
+    assert_log_line "--continue"
+    assert_log_before "exec" "download"
+    # The exit sync still downloads the workspace only: session state stays
+    # inside the sandbox.
+    assert_log_line "/sandbox/project"
+    assert_log_missing "/.local/state"
+}
+
+test_run_resume_flags() {
+    begin "run forwards session flags and keeps the prompt separate"
+    new_case run-resume
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    run_maki run --continue "fix the tests"
+    assert_rc 0
+    assert_log_line "--continue"
+    assert_log_line "fix the tests"
+    assert_log_before "--continue" "fix the tests"
+
+    reset_log
+    run_maki run --resume CgADMGeR7WnHDw7NJRUfN "keep going"
+    assert_rc 0
+    assert_log_line "--resume"
+    assert_log_line "CgADMGeR7WnHDw7NJRUfN"
+    assert_log_line "keep going"
+    assert_log_before "--resume" "keep going"
+
+    reset_log
+    run_maki run --session-id ci-run-42 "start the migration"
+    assert_rc 0
+    assert_log_line "--session-id"
+    assert_log_line "ci-run-42"
+    assert_log_line "start the migration"
+    assert_log_before "--session-id" "start the migration"
+
+    # Sync-back is unchanged by resume flags: workspace only, no state dir.
+    assert_log_before "exec" "download"
+    assert_log_line "/sandbox/project"
+    assert_log_missing "/.local/state"
+}
+
+test_session_flag_conflicts() {
+    begin "--continue with --resume is refused, and session flags are inert elsewhere"
+    new_case session-flag-conflicts
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+
+    run_maki maki --continue --resume CgADMGeR7WnHDw7NJRUfN
+    assert_rc 1
+    assert_err_has "--continue cannot be combined with --resume"
+    assert_log_missing "exec"
+    assert_log_missing "create"
+
+    reset_log
+    run_maki status --continue
+    assert_rc 0
+    assert_out_has "Sandbox:   maki-myproject"
+    assert_log_missing "exec"
+}
+
 test_session_creates_uploads_and_syncs() {
     begin "bare maki-oss creates, uploads, runs, and syncs back in order"
     new_case session-create
@@ -1608,6 +1700,9 @@ test_fish_completions() {
     assert_fish_out_has "--yes"
     assert_fish_out_has "--model"
     assert_fish_out_has "--no-sync"
+    assert_fish_out_has "--continue"
+    assert_fish_out_has "--resume"
+    assert_fish_out_has "--session-id"
 
     run_fish "complete -C 'maki-oss provider '"
     assert_rc 0
@@ -1681,6 +1776,9 @@ run_test test_provider_setup_sigint
 run_test test_provider_setup_custom_validation
 run_test test_provider_setup_no_jq
 run_test test_run_model_flag
+run_test test_maki_resume
+run_test test_run_resume_flags
+run_test test_session_flag_conflicts
 run_test test_session_creates_uploads_and_syncs
 run_test test_session_reuses_without_upload
 run_test test_session_reuse_announces_overwrite

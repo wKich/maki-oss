@@ -35,7 +35,9 @@ maki-oss                       # ensure the sandbox, run Maki, sync back
 Bare `maki-oss` creates or reuses the project's sandbox, uploads the project
 when the sandbox is first created, attaches remembered providers, launches
 Maki, and downloads changes back into the project directory on exit.
-`maki-oss run "<prompt>"` is the headless variant of the same flow. See
+`maki-oss run "<prompt>"` is the headless variant of the same flow, and
+`maki-oss --continue` / `maki-oss --resume <ID>` pick the conversation up
+where the last session in the sandbox left off. See
 [`docs/helper.md`](docs/helper.md) for the full reference.
 
 ## Guides

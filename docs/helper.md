@@ -147,6 +147,20 @@ merges: matching files are overwritten and host-only files are never deleted.
 `--no-sync` skips it. `--model provider/model` (or the config `model` key)
 selects the model.
 
+Three session flags are forwarded to Maki unchanged: `--continue` resumes the
+most recent session in the sandbox workdir, `--resume <ID>` resumes a
+specific session, and `--session-id <ID>` writes the run under a chosen id.
+`--continue` together with `--resume` is a usage error. Maki validates ids as
+base58, so characters like `-` and `0` are rejected by Maki itself, not by the
+helper. On commands that do not launch Maki the flags are accepted and
+ignored, like `--model`. Maki's own flag semantics are documented in the
+upstream reference pack ([`docs/ai/references.md`](ai/references.md)).
+
+Sessions live in the sandbox's container filesystem, not on the host: they
+survive `stop` and `start`, but are lost when the sandbox is deleted and
+recreated (`maki-oss rm`). The helper stores no session state on the host,
+and the exit sync still downloads only the sandbox workdir.
+
 A session that **reuses** an existing sandbox does not re-upload the project,
 so the sandbox may still hold an earlier copy of your files. Because the exit
 sync overwrites matching host files, the helper prints a `Reusing ...` note to
@@ -155,8 +169,9 @@ the current host tree when you do not want that merge.
 
 ```sh
 cd ~/code/myproject
-maki-oss            # ensure + interactive Maki + sync back
-maki-oss --no-sync  # leave changes in the sandbox only
+maki-oss             # ensure + interactive Maki + sync back
+maki-oss --continue  # resume the most recent session in the sandbox
+maki-oss --no-sync   # leave changes in the sandbox only
 ```
 
 ### run
@@ -168,9 +183,16 @@ so stdout carries only Maki's output. `--model <provider/model>` is passed
 through as Maki's `--model` and overrides the config `model` key, so any
 credentialed provider can be selected without touching the interactive picker.
 
+The session flags apply here too — `--continue`, `--resume <ID>`, and
+`--session-id <ID>` — which is how a headless run is chained onto a previous
+one. The same lifetime caveat applies: the session exists only as long as the
+sandbox does.
+
 ```sh
 maki-oss run "fix the failing tests"
 maki-oss run --model deepseek/deepseek-chat "check the changelog"
+maki-oss run --session-id smokeResumeSessionAbc "start the migration"
+maki-oss run --resume smokeResumeSessionAbc "continue where the previous run stopped"
 ```
 
 ### upload / download

@@ -95,6 +95,11 @@ Common options:
                    for provider setup, the host variable name to read
   --allow-env KEY  Allow a credential-like key passed with --env (repeatable)
   --model SPEC     Model for sessions and run (provider/model)
+  --continue       Session commands: resume the most recent session in the
+                    sandbox workdir (sessions live in the sandbox: they
+                    survive stop/start, but not deletion of the sandbox)
+  --resume ID      Session commands: resume a specific session by id
+  --session-id ID  Session commands: write the run under a chosen session id
   --no-sync        Session commands: skip the download back to the host on
                    exit (default: download the project and merge it in)
   --yes            Skip confirmation prompts (rm, policy set, provider setup)
@@ -1015,11 +1020,20 @@ cmd_maki() {
     session_interrupted=0
     trap 'session_interrupted=1' INT TERM
     maki_rc=0
+    set -- maki
     if [ -n "$model" ]; then
-        os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki --model "$model" || maki_rc=$?
-    else
-        os sandbox exec -n "$name" --tty --workdir "$workdir" -- maki || maki_rc=$?
+        set -- "$@" --model "$model"
     fi
+    if [ "$opt_continue" -eq 1 ]; then
+        set -- "$@" --continue
+    fi
+    if [ -n "$opt_resume" ]; then
+        set -- "$@" --resume "$opt_resume"
+    fi
+    if [ -n "$opt_session_id" ]; then
+        set -- "$@" --session-id "$opt_session_id"
+    fi
+    os sandbox exec -n "$name" --tty --workdir "$workdir" -- "$@" || maki_rc=$?
     trap - INT TERM
     if [ "$session_interrupted" -eq 1 ] && [ "$maki_rc" -eq 0 ]; then
         maki_rc=130
@@ -1040,13 +1054,21 @@ cmd_run() {
     session_interrupted=0
     trap 'session_interrupted=1' INT TERM
     run_rc=0
+    set -- maki --print --yolo --trust --output-format json
     if [ -n "$model" ]; then
-        os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
-            maki --print --yolo --trust --output-format json --model "$model" "$prompt" || run_rc=$?
-    else
-        os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- \
-            maki --print --yolo --trust --output-format json "$prompt" || run_rc=$?
+        set -- "$@" --model "$model"
     fi
+    if [ "$opt_continue" -eq 1 ]; then
+        set -- "$@" --continue
+    fi
+    if [ -n "$opt_resume" ]; then
+        set -- "$@" --resume "$opt_resume"
+    fi
+    if [ -n "$opt_session_id" ]; then
+        set -- "$@" --session-id "$opt_session_id"
+    fi
+    set -- "$@" "$prompt"
+    os sandbox exec -n "$name" --no-login-shell --workdir "$workdir" -- "$@" || run_rc=$?
     trap - INT TERM
     if [ "$session_interrupted" -eq 1 ] && [ "$run_rc" -eq 0 ]; then
         run_rc=130
@@ -2333,6 +2355,9 @@ opt_file=
 opt_field=
 opt_profile=
 opt_model=
+opt_continue=0
+opt_resume=
+opt_session_id=
 opt_attach=
 opt_help=0
 
@@ -2346,6 +2371,14 @@ append_list() {
 }
 
 OPT_ARGC=$#
+# The loop below rotates command words to the end of argv, so a value flag in
+# the last position would pull a command word back in as its own value. Catch
+# a trailing --resume/--session-id before that rotation starts.
+for opt_trailing in "$@"; do :; done
+case ${opt_trailing:-} in
+    --resume) die_usage "option --resume requires a value" ;;
+    --session-id) die_usage "option --session-id requires a value" ;;
+esac
 OPT_I=0
 while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
     OPT=$1
@@ -2466,6 +2499,23 @@ while [ "$OPT_I" -lt "$OPT_ARGC" ]; do
             shift
             OPT_I=$((OPT_I + 1))
             ;;
+        --continue)
+            opt_continue=1
+            ;;
+        --resume)
+            [ "$#" -gt 0 ] || die_usage "option --resume requires a value"
+            [ -n "$1" ] || die_usage "option --resume requires a non-empty value"
+            opt_resume=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
+        --session-id)
+            [ "$#" -gt 0 ] || die_usage "option --session-id requires a value"
+            [ -n "$1" ] || die_usage "option --session-id requires a non-empty value"
+            opt_session_id=$1
+            shift
+            OPT_I=$((OPT_I + 1))
+            ;;
         --since)
             [ "$#" -gt 0 ] || die_usage "option --since requires a value"
             opt_since=$1
@@ -2532,6 +2582,12 @@ done
 if [ "$opt_help" -eq 1 ]; then
     usage
     exit 0
+fi
+
+# --continue and --resume name different sessions; upstream's precedence when
+# both are passed is unspecified, so refuse the pair instead of guessing.
+if [ "$opt_continue" -eq 1 ] && [ -n "$opt_resume" ]; then
+    die_usage "--continue cannot be combined with --resume"
 fi
 
 load_config
