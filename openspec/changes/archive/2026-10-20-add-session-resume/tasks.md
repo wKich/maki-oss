@@ -24,4 +24,4 @@
 
 - [x] 4.1 `make test && make lint` both green from the repository root.
 - [x] 4.2 `openspec validate add-session-resume --strict` reports the change valid.
-- [ ] 4.3 Manual smoke against the live gateway: `maki-oss run --session-id resume-smoke-<date> "say ok"` then `maki-oss run --resume <that id> "what did you just say?"` must answer from the first transcript, keep stdout Maki-only, and still print the sync-back note on stderr — verify by running both commands against the `maki-maki-openshell` sandbox in `Ready` phase.
+- [x] 4.3 Manual smoke against the live gateway: `maki-oss run --session-id <22-char-base58-id> "say ok"` (ids must decode to 16 bytes: base58, no `-`, `0`, `O`, `I`, `l`) then `maki-oss run --resume <that id> "what did you just say?"` must answer from the first transcript, keep stdout Maki-only, and still print the sync-back note on stderr — verify by running both commands against the `maki-maki-openshell` sandbox in `Ready` phase. Done 2026-10-20 with `--model deepseek/deepseek-chat`, ids `DsSpkRsmkTeeQmNvxWp3aB`: resume answered from the first transcript, stdout Maki-only, sync-back note printed.

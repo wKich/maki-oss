@@ -73,6 +73,7 @@ new_case() {
     ENV_EDITOR=
     EXEC_STDOUT=
     EXEC_EXIT=
+    EXEC_CASES=
     GATEWAY_DOWN=
     PROVIDER_NAMES=
     PROFILE_NAMES=
@@ -84,6 +85,7 @@ new_case() {
     SETTINGS_EXIT=
     RULE_EXIT=
     RULE_PENDING=
+    POLICY_FULL=
     JSON_COMPACT=
     CREATE_RACE=
     INTERACTIVE=
@@ -106,6 +108,7 @@ run_maki_with_input() { # STDIN_FILE ARGS...
         STUB_STATE_DIR="$STUB_STATE_DIR" \
         STUB_EXEC_STDOUT="${EXEC_STDOUT:-stub-exec-output}" \
         STUB_EXEC_EXIT="${EXEC_EXIT:-0}" \
+        STUB_EXEC_CASES="${EXEC_CASES:-}" \
         STUB_GATEWAY_DOWN="${GATEWAY_DOWN:-0}" \
         STUB_PROVIDER_NAMES="${PROVIDER_NAMES:-}" \
         STUB_PROFILE_NAMES="${PROFILE_NAMES:-}" \
@@ -117,6 +120,7 @@ run_maki_with_input() { # STDIN_FILE ARGS...
         STUB_SETTINGS_EXIT="${SETTINGS_EXIT:-}" \
         STUB_RULE_EXIT="${RULE_EXIT:-}" \
         STUB_RULE_PENDING="${RULE_PENDING:-}" \
+        STUB_POLICY_FULL="${POLICY_FULL:-}" \
         STUB_JSON_COMPACT="${JSON_COMPACT:-0}" \
         STUB_CREATE_RACE="${CREATE_RACE:-0}" \
         MAKI_OSS_SANDBOX_NAME="${ENV_NAME:-}" \
@@ -356,6 +360,8 @@ test_help() {
     assert_out_has "--resume"
     assert_out_has "--session-id"
     assert_out_has "survive stop/start"
+    assert_out_has "mcp"
+    assert_out_has "mcp status"
 }
 
 test_usage_errors() {
@@ -670,6 +676,231 @@ test_doctor_all_pass() {
     assert_out_has "image: maki-agent:local present"
     assert_out_has "policy file:"
     assert_out_has "providers: maki-anthropic"
+    assert_out_has "MCP readiness (informational):"
+}
+
+# Writes a host mcp.toml declaring one HTTP server (and, when given, a stdio
+# server) so mcp status has something to compare against the sandbox config.
+# The ${VAR} header values must stay literal: they are the placeholder-only
+# references that mcp status verifies never hold a credential.
+# shellcheck disable=SC2016
+seed_host_mcp() { # [STDIO]
+    mkdir -p "$HOME/.config/maki"
+    {
+        printf '[mcp.context7]\n'
+        printf 'url = "https://mcp.context7.com/mcp"\n'
+        printf 'headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }\n'
+        printf 'enabled = true\n'
+        if [ "${1:-}" = stdio ]; then
+            printf '\n[mcp.synthetic]\n'
+            printf 'command = ["bunx", "-y", "synthetic-search-mcp"]\n'
+            printf 'environment = { SYNTHETIC_API_KEY = "${SYNTHETIC_API_KEY}" }\n'
+            printf 'enabled = true\n'
+        fi
+    } >"$HOME/.config/maki/mcp.toml"
+}
+
+# The sandbox-side config, returned by the stubbed `sandbox exec cat`. Its
+# stdio entry mirrors the baked examples/maki-image/config/mcp.toml: the
+# pre-warmed script run under bun (its own bin carries a node shebang).
+# shellcheck disable=SC2016  # ${VAR} headers must stay literal placeholders
+sandbox_mcp_fixture() { # [STDIO]
+    printf '[mcp.context7]\n'
+    printf 'url = "https://mcp.context7.com/mcp"\n'
+    printf 'headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }\n'
+    printf 'enabled = true\n'
+    if [ "${1:-}" = stdio ]; then
+        printf '[mcp.synthetic]\n'
+        printf 'command = ["bun", "/sandbox/.bun/install/global/node_modules/synthetic-search-mcp/bin/index.js"]\n'
+        printf 'environment = { SYNTHETIC_API_KEY = "${MCP_SYNTHETIC_API_KEY}" }\n'
+        printf 'enabled = true\n'
+    fi
+}
+
+# Writes the sandbox config fixture and a STUB_EXEC_CASES file where `cat`
+# returns it (exit 0) and `command -v` answers per the wanted runtime state:
+# seed_exec_stdio RUNTIME_EXIT (0 = runtime present, 1 = missing).
+seed_exec_stdio() { # RUNTIME_EXIT
+    sandbox_mcp_fixture stdio >"$CASE/sandbox-mcp.toml"
+    printf '/usr/local/bin/bun\n' >"$CASE/bun-path"
+    printf 'command -v|%s|%s\n-- cat|0|%s\n' \
+        "$1" "$CASE/bun-path" "$CASE/sandbox-mcp.toml" >"$CASE/exec-cases"
+    EXEC_CASES=$CASE/exec-cases
+}
+
+test_mcp_status_all_gates_satisfied() {
+    begin "mcp status reports every gate satisfied and exits 0"
+    new_case mcp-status-ready
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp
+    attach_stub_provider maki-myproject mcp-context7
+    EXEC_STDOUT=$(sandbox_mcp_fixture)
+    POLICY_FULL='network_policies:
+  _provider_mcp_context7:
+    endpoints:
+      - host: mcp.context7.com
+        port: 443
+        protocol: mcp'
+
+    run_maki mcp status
+    assert_rc 0
+    assert_out_has "MCP readiness for sandbox 'maki-myproject':"
+    assert_out_has "context7: sandbox=ok provider=ok endpoint=ok transport=http"
+    assert_out_missing "fix:"
+}
+
+test_mcp_status_failing_gate_names_fix() {
+    begin "mcp status names the failing gate and its fix, and exits non-zero"
+    new_case mcp-status-fail
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp
+    EXEC_STDOUT=$(sandbox_mcp_fixture)
+    POLICY_FULL='host: mcp.context7.com'
+
+    run_maki mcp status
+    assert_rc 3
+    assert_out_has "context7: sandbox=ok provider=missing endpoint=ok transport=http"
+    assert_out_has "fix: maki-oss provider attach mcp-context7"
+    # Read-only: no gateway mutation was attempted.
+    assert_log_missing "create"
+    assert_log_missing "attach"
+    assert_log_missing "import"
+    assert_log_missing "update"
+}
+
+test_mcp_status_host_only_server() {
+    begin "mcp status names a host-only server with the rebuild command"
+    new_case mcp-status-hostonly
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp
+    # The sandbox config predates the host server: exec fails (no file).
+    EXEC_EXIT=1
+
+    run_maki mcp status
+    assert_rc 3
+    assert_out_has "context7: sandbox=missing"
+    assert_out_has "fix: maki-oss image build"
+}
+
+test_mcp_status_stdio_all_gates_satisfied() {
+    begin "mcp status judges a stdio server by its runtime gate and exits 0"
+    new_case mcp-status-stdio
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp stdio
+    attach_stub_provider maki-myproject mcp-context7
+    attach_stub_provider maki-myproject mcp-synthetic
+    seed_exec_stdio 0
+    POLICY_FULL='host: mcp.context7.com'
+
+    run_maki mcp status
+    assert_rc 0
+    assert_out_has "synthetic: sandbox=ok runtime=ok provider=ok transport=stdio"
+    assert_out_has "context7: sandbox=ok provider=ok endpoint=ok transport=http"
+    assert_out_missing "fix:"
+    # Reporting is read-only: no gateway or sandbox mutation, no install.
+    assert_log_missing "create"
+    assert_log_missing "attach"
+    assert_log_missing "import"
+    assert_log_missing "update"
+    assert_log_missing "build"
+    # No credential material (config environment entry) in the output.
+    assert_secret_absent '${SYNTHETIC_API_KEY}'
+    assert_secret_absent 'SYNTHETIC_API_KEY'
+}
+
+test_mcp_status_stdio_missing_runtime_names_build_fix() {
+    begin "mcp status names a missing stdio runtime with the image-build fix"
+    new_case mcp-status-stdio-missing
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp stdio
+    attach_stub_provider maki-myproject mcp-context7
+    attach_stub_provider maki-myproject mcp-synthetic
+    seed_exec_stdio 1
+    POLICY_FULL='host: mcp.context7.com'
+
+    run_maki mcp status
+    assert_rc 3
+    assert_out_has "synthetic: sandbox=ok runtime=missing provider=ok transport=stdio"
+    assert_out_has "fix: maki-oss image build (the runtime 'bun' that 'synthetic' runs with is missing from the sandbox)"
+    assert_out_missing "fix: maki-oss provider attach"
+    # Read-only: the fix is printed, never performed; nothing is installed.
+    assert_log_missing "create"
+    assert_log_missing "attach"
+    assert_log_missing "import"
+    assert_log_missing "update"
+    assert_log_missing "build"
+    assert_secret_absent '${SYNTHETIC_API_KEY}'
+    assert_secret_absent 'SYNTHETIC_API_KEY'
+}
+
+test_mcp_status_no_sandbox() {
+    begin "mcp status reports no sandbox and exits 0"
+    new_case mcp-status-nosandbox
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_host_mcp
+
+    run_maki mcp status
+    assert_rc 0
+    assert_out_has "No sandbox 'maki-myproject'"
+    assert_log_missing "exec"
+}
+
+test_mcp_status_none_configured() {
+    begin "mcp status reports none configured on both sides and exits 0"
+    new_case mcp-status-empty
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    EXEC_STDOUT='(no mcp config present)'
+
+    run_maki mcp status
+    assert_rc 0
+    assert_out_has "no MCP servers configured"
+    assert_log_missing "create"
+    assert_log_missing "attach"
+    assert_log_missing "import"
+}
+
+test_doctor_mcp_section_informational() {
+    begin "doctor prints an MCP failure but still exits 0"
+    new_case doctor-mcp
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    seed_host_mcp
+    EXEC_STDOUT=$(sandbox_mcp_fixture)
+    POLICY_FULL='host: mcp.context7.com'
+
+    run_maki doctor
+    assert_rc 0
+    assert_out_has "MCP readiness (informational):"
+    assert_out_has "context7: sandbox=ok provider=missing endpoint=ok transport=http"
+    assert_out_has "fix: maki-oss provider attach mcp-context7"
+}
+
+test_doctor_mcp_none_configured() {
+    begin "doctor's MCP section reports none configured and keeps the exit code"
+    new_case doctor-mcp-empty
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR"
+    seed_sandbox maki-myproject Ready
+    EXEC_STDOUT='(no mcp config present)'
+
+    run_maki doctor
+    assert_rc 0
+    assert_out_has "MCP readiness (informational):"
+    assert_out_has "none configured"
 }
 
 test_image_build_argv() {
@@ -2036,6 +2267,15 @@ run_test test_rm_confirmation
 run_test test_doctor_missing_cli
 run_test test_doctor_gateway_down
 run_test test_doctor_all_pass
+run_test test_mcp_status_all_gates_satisfied
+run_test test_mcp_status_failing_gate_names_fix
+run_test test_mcp_status_host_only_server
+run_test test_mcp_status_stdio_all_gates_satisfied
+run_test test_mcp_status_stdio_missing_runtime_names_build_fix
+run_test test_mcp_status_no_sandbox
+run_test test_mcp_status_none_configured
+run_test test_doctor_mcp_section_informational
+run_test test_doctor_mcp_none_configured
 run_test test_image_build_argv
 run_test test_status_list_logs
 run_test test_start_stop

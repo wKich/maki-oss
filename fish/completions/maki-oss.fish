@@ -16,6 +16,7 @@ complete -c maki-oss -n __fish_use_subcommand -a list -d 'List sandboxes on the 
 complete -c maki-oss -n __fish_use_subcommand -a logs -d 'Show sandbox logs'
 complete -c maki-oss -n __fish_use_subcommand -a policy -d 'Work with the sandbox policy'
 complete -c maki-oss -n __fish_use_subcommand -a provider -d 'Work with provider credentials'
+complete -c maki-oss -n __fish_use_subcommand -a mcp -d 'Report MCP server readiness'
 complete -c maki-oss -n __fish_use_subcommand -a start -d 'Start the sandbox'
 complete -c maki-oss -n __fish_use_subcommand -a stop -d 'Stop the sandbox'
 complete -c maki-oss -n __fish_use_subcommand -a rm -d 'Delete the sandbox'
@@ -34,6 +35,7 @@ complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a add -d 'Create
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a attach -d 'Attach a provider to the sandbox'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a list -d 'List providers on the gateway'
 complete -c maki-oss -n '__fish_seen_subcommand_from provider' -a setup -d 'Set up a provider from a stored credential'
+complete -c maki-oss -n '__fish_seen_subcommand_from mcp' -a status -d 'Report MCP server readiness in the sandbox'
 complete -c maki-oss -n '__fish_seen_subcommand_from fish' -a install -d 'Install the fish plugin'
 complete -c maki-oss -n '__fish_seen_subcommand_from fish' -a uninstall -d 'Remove the fish plugin'
 

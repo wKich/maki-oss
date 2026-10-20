@@ -151,7 +151,8 @@ Three session flags are forwarded to Maki unchanged: `--continue` (`-c`)
 resumes the most recent session in the sandbox workdir, `--resume <ID>`
 (`-r <ID>`) resumes a specific session, and `--session-id <ID>` writes the run
 under a chosen id. `--continue` together with `--resume` is a usage error.
-Maki validates ids as base58, so characters like `-` and `0` are rejected by
+Maki validates ids as base58 encoding of exactly 16 bytes, so a usable id is 22
+characters with no `-`, `0`, `O`, `I`, or `l`; anything else is rejected by
 Maki itself, not by the helper. On commands that do not launch Maki the flags
 are accepted and ignored, like `--model`. Maki's own flag semantics are
 documented in the upstream reference pack
@@ -192,8 +193,8 @@ sandbox does.
 ```sh
 maki-oss run "fix the failing tests"
 maki-oss run --model deepseek/deepseek-chat "check the changelog"
-maki-oss run --session-id smokeResumeSessionAbc "start the migration"
-maki-oss run --resume smokeResumeSessionAbc "continue where the previous run stopped"
+maki-oss run --session-id aSmokeResumeSessAbcdXy "start the migration"
+maki-oss run --resume aSmokeResumeSessAbcdXy "continue where the previous run stopped"
 ```
 
 ### upload / download
@@ -343,6 +344,56 @@ non-TTY stdin, the command exits non-zero before any gateway mutation, like
 `rm`. `MAKI_OSS_INTERACTIVE=1` treats piped stdin as interactive so scripted
 runs (and the test suite) can answer the prompts. The curated catalog and
 troubleshooting live in [`docs/providers.md`](providers.md).
+
+### mcp status
+
+Reports whether every MCP server configured on the host will actually work
+inside the sandbox. It compares two configs — the host's
+`~/.config/maki/mcp.toml` and the sandbox's baked
+`/sandbox/.config/maki/mcp.toml` — and prints one line per server naming the
+gates that decide whether it works: **present in the sandbox** and **provider
+attached** for every server, plus **endpoint in the effective policy** for an
+HTTP server and **runtime present** — the command its `command` array names
+resolving in the sandbox — for a stdio server. Each failing gate is followed
+by the command that fixes it.
+
+```sh
+maki-oss mcp status
+```
+
+```text
+MCP readiness for sandbox 'maki-myproject':
+  context7: sandbox=ok provider=ok endpoint=ok transport=http
+  synthetic: sandbox=ok runtime=ok provider=ok transport=stdio
+```
+
+It exits non-zero when any server fails a gate, so it is scriptable. Three
+cases exit clean: no sandbox exists yet, neither side declares a server, or
+every gate holds.
+
+**The host-vs-sandbox drift check** covers the failure this command exists to
+end: a server added to `~/.config/maki/mcp.toml` *after* the image was built is
+silently absent in the sandbox. `mcp status` names it as `sandbox=missing` with
+`maki-oss image build` as the fix. Because the config is baked at image build,
+any change to the server set means a rebuild — see
+[`docs/mcp-migration.md`](mcp-migration.md) §4.
+
+An OAuth-gated server reports its provider as missing until the host-side login
+has been handed to the gateway; the sandbox receives only a placeholder, never
+the access token. A stdio server is judged by its **runtime gate** — the
+command its `command` array names, checked read-only in the sandbox — instead
+of being rejected for its transport. A missing runtime reads
+`synthetic: sandbox=ok runtime=missing provider=ok transport=stdio` followed by
+`fix: maki-oss image build (the runtime 'bun' that 'synthetic' runs with is
+missing from the sandbox)`: the output names the missing command and the
+image-build fix, and the helper never installs a runtime itself.
+
+**Reporting is read-only.** It never mutates the sandbox, the gateway, any
+profile, or the policy, and it never prints a credential value — headers and
+`environment` values are skipped rather than parsed. `maki-oss doctor` prints
+the same table in an informational section after its prerequisite checks, but
+MCP is not a prerequisite for running Maki: a failing MCP gate never changes
+`doctor`'s exit code, and a project that never set up MCP is not failed.
 
 ### fish install / uninstall
 

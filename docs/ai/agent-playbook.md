@@ -53,11 +53,11 @@ extracting tokens.
 ## Phase 1 — Build the image
 
 ```sh
-docker build --build-arg MAKI_VERSION=0.6.0 -t maki-agent:local examples/maki-image
+docker build --build-arg MAKI_VERSION=0.6.4 -t maki-agent:local examples/maki-image
 docker run --rm maki-agent:local maki --version
 ```
 
-Verify: the build succeeds and prints `maki 0.6.0`.
+Verify: the build succeeds and prints `maki 0.6.4`.
 
 ## Phase 2 — Load the provider profile and create the provider
 

@@ -1,0 +1,64 @@
+# Synthetic Search MCP provider profile for OpenShell.
+#
+# The `synthetic` stdio MCP server (examples/maki-image/config/mcp.toml) runs
+# in the sandbox as a local pipe that Maki spawns — the gateway never inspects
+# that leg. What it does see is the server process's own outbound API call, so
+# this profile declares that endpoint with the protocol it actually serves
+# (rest, not mcp) and binds its credential to it. The sandbox config
+# references the key as a ${MCP_SYNTHETIC_API_KEY} placeholder; the real value
+# never enters the image. Tool-level control for a stdio server stays with
+# Maki's permissions.toml [mcp.synthetic] rules; the gateway's MCP tool policy
+# does not apply to a pipe the gateway cannot read.
+#
+# The credential variable is MCP_SYNTHETIC_API_KEY, NOT SYNTHETIC_API_KEY, on
+# purpose: a sandbox can attach only one provider per credential key, and
+# maki-synthetic (inference) already owns SYNTHETIC_API_KEY — attaching both
+# under one key is refused by the gateway. Same endpoint, different key is
+# fine (afk-synthetic proves it). The real key value is the same either way;
+# only the sandbox-side variable name differs. Note the baked mcp.toml keeps
+# the child-facing table key SYNTHETIC_API_KEY (the package reads that name)
+# and expands this profile's ${MCP_SYNTHETIC_API_KEY} into it.
+#
+# Endpoint confirmed from the package source: synthetic-search-mcp calls
+# https://api.synthetic.new/v2/search.
+#
+# Lint and import from the repository root:
+#   openshell profile lint -f examples/providers/mcp-synthetic.yaml
+#   openshell profile import -f examples/providers/mcp-synthetic.yaml --global
+#
+# Then create the provider instance from your host environment:
+#   MCP_SYNTHETIC_API_KEY=<key> openshell provider create \
+#     --name mcp-synthetic --type mcp-synthetic --from-existing
+#
+# Or let the helper do both steps:
+#   maki-oss provider setup --profile examples/providers/mcp-synthetic.yaml \
+#     --env MCP_SYNTHETIC_API_KEY --yes
+#
+# After changing the server set, rebuild the sandbox image so the baked
+# mcp.toml matches (maki-oss image build).
+
+id: mcp-synthetic
+display_name: Synthetic Search (stdio MCP)
+description: Synthetic Search API backing the synthetic stdio MCP server
+category: knowledge
+
+credentials:
+  - name: api_key
+    description: Synthetic Search API key
+    env_vars: [MCP_SYNTHETIC_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+
+discovery:
+  credentials: [api_key]
+
+endpoints:
+  - host: api.synthetic.new
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+
+binaries:
+  - /usr/local/bin/maki

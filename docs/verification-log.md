@@ -3,6 +3,204 @@
 Recorded dry runs for this repository. Actual outputs are trimmed to the
 relevant lines.
 
+## OpenShell v0.1.4 upgrade — 2026-10-20
+
+Upgrade of the pinned OpenShell from v0.1.2 to v0.1.4 (released 2026-10-13),
+using the documented install path, which on macOS installs the release's
+generated Homebrew formula and restarts the gateway service:
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+```
+
+```text
+$ openshell --version
+openshell 0.1.4
+
+$ openshell status
+  Gateway: openshell
+  Server: https://localhost:17670
+  Status: Connected
+  Authentication: Authenticated (mTLS transport)
+  Version: 0.1.4
+
+$ openshell gateway info
+  Status: healthy
+  Version: 0.1.4
+  Compute drivers: docker (Driver version: 0.1.4)
+```
+
+### Version-dependent re-verification
+
+`openshell rule get <sandbox> --status pending` at v0.1.4 still emits
+human-readable text only (`Network Rules: (version 1, 2 chunks)` with one
+indented block per chunk) — no JSON output and no `-o json` flag. The format
+did not change, so the version note in `openspec/specs/policy-review/spec.md`
+is unchanged.
+
+`maki-oss doctor` re-run against the upgraded gateway: every prerequisite
+check printed `ok` and the command exited 0 with no new failures.
+
+### 5.1 context7 end-to-end smoke test (2026-10-20)
+
+Against the upgraded v0.1.4 gateway, with the rebuilt image carrying
+`mcp.toml`. The profile carries both egress and the credential binding, so the
+setup is the existing profile flow:
+
+```sh
+CONTEXT7_API_KEY=<key> maki-oss provider setup \
+  --profile examples/providers/mcp-context7.yaml --env CONTEXT7_API_KEY --yes --attach
+```
+
+Result: `Provider profile lint passed.`, `Imported 1 provider profile.`,
+`✓ Created provider mcp-context7`, and attach completed with
+`Installed: credentials=true, policy=true, future process environment=true`.
+
+```text
+$ maki-oss mcp status
+  context7: sandbox=ok provider=ok endpoint=ok transport=http
+  synthetic: transport=stdio (unsupported in the sandbox)
+    reason: the image ships no server runtime (npx/bunx); only HTTP servers are supported
+  linear: sandbox=ok provider=missing endpoint=missing transport=http
+```
+
+The two non-ready lines are expected in this run: `synthetic` is a stdio
+server (reported unsupported by design), and `linear` is the OAuth exemplar
+whose login was not completed (covered by 5.2). `context7` — the subject of
+this check — reports every gate satisfied and the command exited non-zero
+only because of the other two servers.
+
+A headless run listed the MCP tools and one live call returned a real answer,
+confirming the gateway substitutes the credential under `protocol: mcp`
+inspection and the sandbox never holds the key:
+
+```text
+$ maki-oss run --no-sync --model deepseek/deepseek-chat "List every MCP tool..."
+Available MCP tools:
+- context7__resolve-library-id
+- context7__query-docs
+
+$ maki-oss run --no-sync --model deepseek/deepseek-chat "Use the context7 tool to look up the React library..."
+React (`/react/react`) — a JavaScript library for building user interfaces.
+```
+
+Note: the default configured model returned an upstream `API error (402):
+Insufficient balance`; the run above used `deepseek/deepseek-chat`. The tool
+names come from one headless run's `result` field.
+
+### 5.2 OAuth-gated exemplar: no access token reaches the sandbox (2026-10-20)
+
+Verified the placeholder half of the OAuth check against the live sandbox. The
+OAuth-gated exemplar (`examples/providers/mcp-linear.yaml`, gateway-brokered
+`oauth2_refresh_token`) was declared in the baked `mcp.toml` but its login was
+not completed, so `LINEAR_MCP_ACCESS_TOKEN` is unset in the sandbox. Reading
+the environment inside the sandbox:
+
+```text
+$ openshell sandbox exec -n maki-maki-openshell --no-login-shell -- \
+    sh -c 'printf "[%s]\n" "$CONTEXT7_API_KEY"; printf "[%s]\n" "$LINEAR_MCP_ACCESS_TOKEN"'
+[<opaque placeholder ending in _CONTEXT7_API_KEY>]
+[]
+```
+
+Each OAuth (and static) variable resolves to an opaque stand-in; values not
+recorded. The context7 variable — a real 43-character key on the host — came
+through as a placeholder rather than the key, and the unset linear variable is
+empty rather than a token. No access token reached the sandbox.
+
+**Not verified here (needs an interactive host login):** completing the
+`maki mcp auth linear` browser flow and then confirming a linear tool call. The
+login step is printed as a host command for the user to run (the helper never
+launches a callback or browser inside the sandbox), so it could not be finished
+by this automated run. After a real login and
+`maki-oss provider attach mcp-linear`, `maki-oss mcp status` should report
+`linear` with every gate satisfied and a headless run should list `linear__*`
+tools. The success criterion for that step is unchanged: each OAuth variable
+resolves to an opaque stand-in and the tool call succeeds.
+
+### 5.3 Negative test: a detached MCP provider is named (2026-10-20)
+
+Detached the live context7 provider and re-ran the readiness report. The
+attachment gate was named with its fix command, and the endpoint gate went with
+it (the profile's endpoint only reaches the effective policy through the
+attached provider):
+
+```text
+$ openshell sandbox provider detach maki-maki-openshell mcp-context7
+$ maki-oss mcp status
+  context7: sandbox=ok provider=missing endpoint=missing transport=http
+    fix: maki-oss provider attach mcp-context7
+EXIT:3
+```
+
+The sandbox session still started with the other servers working: a headless
+run exited 0 with no error on stderr, and reported the Context7 tools as the
+only MCP tools — the detached server's definition stays in the baked config, it
+just has no provider behind it, so it fails one gate rather than taking the
+session down. The provider was reattached afterwards (`maki-oss provider
+attach mcp-context7 --wait`).
+
+### 5.4 stdio server reported unsupported; no runtime added (2026-10-20)
+
+```text
+$ maki-oss mcp status
+  synthetic: transport=stdio (unsupported in the sandbox)
+    reason: the image ships no server runtime (npx/bunx); only HTTP servers are supported
+```
+
+`git status` in `examples/` shows only this change's own MCP files (the baked
+`mcp.toml` and the two shipped profiles) plus the pre-existing image edits — no
+package install and no image change was made for the stdio server. The
+Dockerfile installs no JavaScript runtime, and the baked `mcp.toml` declares no
+`command` server. The helper reports stdio as unsupported rather than failing
+silently, and never installs a runtime to make one work.
+
+Reminder for anyone extending this log: the proxy rejects any request body
+containing the literal placeholder prefix, and Maki sends loaded context in
+every request body, so the prefix is never spelled here or in any file an agent
+may load — describe it in prose only.
+
+### 5.2 result (2026-10-20, later same day): blocked at token mint by Linear's client-auth strictness
+
+The mechanism is sound end to end up to the token mint, but Linear's token
+endpoint rejects the gateway's client authentication, so the grant cannot mint
+an access token. Verified:
+
+- `maki mcp auth linear` completed on the host (the server first had to be
+  declared in the host's `~/.config/maki/mcp.toml` — url only; maki stores the
+  client registration and tokens under `~/.local/state/maki/auth/`).
+- Gateway side: the `mcp-linear` profile imports, the provider is created with
+  `--runtime-credentials`, refresh is configured with
+  `--secret-material-env refresh_token=...` (secret material never in argv),
+  and the provider attaches. `maki-oss mcp status` then reports `linear:
+  sandbox=ok provider=ok endpoint=ok transport=http`.
+- The exchange itself fails: every gateway attempt ends
+  `oauth_refresh_exchange_uncertain` / `reauthorization_required` ("refresh
+  token exchange returned an unusable response"), in both automatic and manual
+  rotation, reproducibly, across two grant configurations.
+- Root cause isolated from the host: Linear's token endpoint accepts only
+  `client_id` in the request body for this dynamically registered public
+  client. The identical body-only refresh exchange returns HTTP 200 with a
+  valid access token; the same exchange with HTTP Basic client authentication
+  returns 401 `invalid_client`, and Basic plus a body `client_id` returns 400
+  "Client must not use multiple authentication methods". The v0.1.4 gateway's
+  client authentication is therefore rejected at Linear's token endpoint.
+- The RFC 8707 `resource` parameter was **not** the issue: the exchange
+  succeeds with and without it.
+- Consequence in the sandbox: with no current credential, OpenShell withholds
+  the placeholder entirely (`LINEAR_MCP_ACCESS_TOKEN` is unset in the sandbox
+  env), so no tool call was possible. "No access token reaches the sandbox"
+  therefore still holds — trivially, until the client-auth mismatch is
+  resolved.
+- Housekeeping: Linear rotates the refresh token on every use; the probes used
+  during isolation wrote the rotated token back into maki's store (mode 0600,
+  atomic replace), so the host login keeps working.
+
+The positive half of task 5.2 stands: login on the host, gateway-brokered
+refresh configuration, placeholder-only transport, and the readiness gates all
+work. The failing half is the live tool call, blocked by the gateway-vs-Linear
+client-authentication mismatch recorded above.
+
 ## Setup-guide dry run
 
 Run of [`docs/setup-guide.md`](setup-guide.md) and

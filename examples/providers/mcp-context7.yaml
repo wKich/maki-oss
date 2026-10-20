@@ -1,0 +1,65 @@
+# Context7 MCP provider profile for OpenShell.
+#
+# Context7 serves library/framework docs over MCP (Streamable HTTP). This
+# profile is both the sandbox's egress rule for the server and the credential
+# boundary: it authorizes /usr/local/bin/maki to reach mcp.context7.com:443/mcp
+# with MCP inspection, and binds CONTEXT7_API_KEY to that endpoint only. The
+# sandbox config references the key as a ${CONTEXT7_API_KEY} placeholder (see
+# examples/maki-image/config/mcp.toml); the real value never enters the sandbox.
+#
+# Lint and import from the repository root:
+#   openshell profile lint -f examples/providers/mcp-context7.yaml
+#   openshell profile import -f examples/providers/mcp-context7.yaml --global
+#
+# Then create the provider instance from your host environment:
+#   CONTEXT7_API_KEY=<key> openshell provider create \
+#     --name mcp-context7 --type mcp-context7 --from-existing
+#
+# Or let the helper do both steps:
+#   maki-oss provider setup --profile examples/providers/mcp-context7.yaml \
+#     --env CONTEXT7_API_KEY --yes
+#
+# After changing the server set, rebuild the sandbox image so the baked
+# mcp.toml matches (maki-oss image build).
+
+id: mcp-context7
+display_name: Context7 (MCP)
+description: Context7 documentation MCP server for the Maki coding agent
+category: knowledge
+
+credentials:
+  - name: api_key
+    description: Context7 API key
+    env_vars: [CONTEXT7_API_KEY]
+    required: true
+    auth_style: header
+    header_name: x-api-key
+
+discovery:
+  credentials: [api_key]
+
+endpoints:
+  - host: mcp.context7.com
+    port: 443
+    path: /mcp
+    protocol: mcp
+    enforcement: enforce
+    mcp:
+      # Ship every 2025 revision the gateway serves: a server pinned to a
+      # revision the endpoint excludes fails with
+      # mcp_protocol_version_not_allowed, and Maki's negotiated revision
+      # varies by release. For a server needing a revision newer than the
+      # gateway supports, omit protocol/mcp and accept uninspected traffic.
+      versions: ["2025-03-26", "2025-06-18", "2025-11-25"]
+      # Core methods for each request's selected revision; tool calls stay
+      # subject to the deny rule below and tool-name validation.
+      allow_all_known_mcp_methods: true
+    deny_rules:
+      # Per-tool deny: Context7 is read-only docs retrieval, so any
+      # write-shaped tool stays blocked even though core methods are allowed.
+      - method: tools/call
+        tool:
+          any: ["*write*"]
+
+binaries:
+  - /usr/local/bin/maki

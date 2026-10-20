@@ -9,8 +9,13 @@
 # Environment knobs:
 #   STUB_LOG              file to append argv to
 #   STUB_STATE_DIR        directory holding simulated state
-#   STUB_EXEC_STDOUT      stdout for `sandbox exec` (default: stub-exec-output)
-#   STUB_EXEC_EXIT        exit code for `sandbox exec` (default: 0)
+#   STUB_EXEC_STDOUT      default stdout for `sandbox exec` (default: stub-exec-output)
+#   STUB_EXEC_EXIT        default exit code for `sandbox exec` (default: 0)
+#   STUB_EXEC_CASES       optional file of per-command exec overrides, one
+#                         `substr|exit|stdout-file` per line (first line whose
+#                         substr appears in the exec argv wins; empty
+#                         stdout-file prints nothing). Unmatched commands fall
+#                         back to STUB_EXEC_STDOUT/STUB_EXEC_EXIT
 #   STUB_GATEWAY_DOWN     "1" makes every command fail as if unreachable
 #   STUB_PROVIDER_NAMES   newline-separated names for `provider list`
 #   STUB_PROFILE_NAMES    newline-separated ids for `profile list`
@@ -30,6 +35,8 @@
 #   STUB_RULE_EXIT        exit code for `rule` (default: 0)
 #   STUB_RULE_PENDING     text printed by `rule get --status pending`; the
 #                         default prints a header with zero chunks
+#   STUB_POLICY_FULL      text printed by `policy get --full` (default: a
+#                         one-line stub policy)
 
 set -eu
 
@@ -188,6 +195,20 @@ case $command_name in
                 rm -f "$sandboxes/$sandbox_name" "$providers/$sandbox_name"
                 ;;
             exec)
+                stub_exec_args=$*
+                if [ -n "${STUB_EXEC_CASES:-}" ] && [ -f "$STUB_EXEC_CASES" ]; then
+                    while IFS='|' read -r stub_key stub_exit stub_file; do
+                        [ -n "$stub_key" ] || continue
+                        case "$stub_exec_args" in
+                            *"$stub_key"*)
+                                if [ -n "$stub_file" ]; then
+                                    cat "$stub_file"
+                                fi
+                                exit "$stub_exit"
+                                ;;
+                        esac
+                    done <"$STUB_EXEC_CASES"
+                fi
                 printf '%s\n' "${STUB_EXEC_STDOUT:-stub-exec-output}"
                 exit "${STUB_EXEC_EXIT:-0}"
                 ;;
@@ -392,7 +413,13 @@ case $command_name in
         esac
         ;;
     policy)
-        printf 'stub policy\n'
+        # argv already logged; STUB_POLICY_FULL lets a test seed the
+        # effective policy text that `policy get --full` prints.
+        if [ -n "${STUB_POLICY_FULL:-}" ]; then
+            printf '%s\n' "$STUB_POLICY_FULL"
+        else
+            printf 'stub policy\n'
+        fi
         ;;
     settings)
         # argv already logged; simulate a gateway that rejects the advisor

@@ -54,6 +54,41 @@ The helper SHALL resolve settings from command-line flags, `MAKI_OSS_*` environm
 - **WHEN** the user runs `maki-oss run --model opencode-go/deepseek-v4.1-flash "check"`
 - **THEN** the sandbox exec invocation passes that model to Maki's `--model` option
 
+### Requirement: Session resume flag pass-through
+The helper SHALL accept `--continue`, `--resume <ID>`, and `--session-id <ID>` on bare `maki-oss`, `maki-oss maki`, and `maki-oss run "<prompt>"`, and SHALL forward them to the Maki process it execs inside the sandbox as Maki's `--continue`, `--resume <ID>`, and `--session-id <ID>` respectively. `--continue` together with `--resume` SHALL be a usage error (exit 1) that names both flags and MUST NOT launch Maki; `--session-id` SHALL be accepted alongside either of them. A missing or empty value for `--resume` or `--session-id` SHALL be a usage error. On commands that do not launch Maki the flags SHALL be accepted and have no effect, exactly as `--model` behaves today. Passing resume flags SHALL NOT change what the helper syncs: the exit sync SHALL still download only the sandbox workspace, never the sandbox's session or state directory, and the helper MUST NOT add any host-side session storage.
+
+#### Scenario: Interactive session resumes the most recent conversation
+- **WHEN** the user runs `maki-oss maki --continue` against a `Ready` sandbox
+- **THEN** the sandbox exec launches `maki` with `--continue` after it, and the session still syncs the workspace back to the host on exit
+
+#### Scenario: Headless run resumes a session by id
+- **WHEN** the user runs `maki-oss run --resume CgADMGeR7WnHDw7NJRUfN "keep going"`
+- **THEN** the sandbox exec launches `maki --print --yolo --trust --output-format json --resume CgADMGeR7WnHDw7NJRUfN "keep going"` and stdout still carries only Maki's output
+
+#### Scenario: Session flags are separated from the prompt
+- **WHEN** the user runs `maki-oss run --continue "fix the tests"`
+- **THEN** the prompt passed to Maki is exactly `fix the tests` and `--continue` appears only as an option, not inside the prompt
+
+#### Scenario: Chosen session id is forwarded
+- **WHEN** the user runs `maki-oss run --session-id ci-run-42 "start the migration"`
+- **THEN** the sandbox exec passes `--session-id ci-run-42` to Maki and the exit sync behavior is unchanged
+
+#### Scenario: Conflicting resume flags are refused
+- **WHEN** the user runs `maki-oss maki --continue --resume CgADMGeR7WnHDw7NJRUfN`
+- **THEN** the helper exits 1 with an error naming both flags and no sandbox exec is recorded
+
+#### Scenario: Missing resume value is refused
+- **WHEN** the user runs `maki-oss maki --resume` with no following argument, or passes an empty `--resume ""`
+- **THEN** the helper exits 1 with a usage error that names `--resume` and launches no Maki process
+
+#### Scenario: Flags on a non-session command have no effect
+- **WHEN** the user runs `maki-oss status --continue`
+- **THEN** the command runs as `status`, exits the way it would without the flag, and launches no Maki process
+
+#### Scenario: Session state never crosses the boundary
+- **WHEN** any session command with resume flags exits and the helper performs its sync
+- **THEN** the download source is the sandbox workspace only, and no session transcript is written under the project directory or any host state directory by the helper
+
 ### Requirement: Project transfer in and out
 `maki-oss upload [path]` SHALL copy a local directory into the sandbox workspace using `openshell sandbox upload` and SHALL NOT create a bind mount or any other host filesystem exposure. `maki-oss download [path] [dest]` SHALL copy files from the sandbox workspace to an explicit host destination.
 
@@ -335,3 +370,52 @@ the `--no-sync` path or on commands that did not launch Maki.
 #### Scenario: Gateway trouble never masks Maki's exit code
 - **WHEN** the pending check itself fails (gateway down, command missing)
 - **THEN** at most a warning is printed and the helper exits with Maki's exit code unchanged
+
+### Requirement: MCP readiness command
+`maki-oss mcp status` SHALL compare the servers enabled in the host's
+`~/.config/maki/mcp.toml` against the servers present in the project sandbox's
+MCP config, and SHALL report one line per server naming each gate that decides
+whether the server works in the sandbox: present in the sandbox config, provider
+attached to the project sandbox, endpoint present in the effective policy, and
+transport supported. A server enabled on the host but absent from the sandbox
+SHALL be reported by name as missing from the sandbox, together with the command
+that rebuilds the image. It SHALL exit non-zero when any server fails a gate,
+and SHALL print the command that fixes each failing gate. When no sandbox exists
+for the project, or neither the host config nor the sandbox config declares an
+enabled server, it SHALL report that and exit zero. It SHALL NOT mutate the
+sandbox, gateway, profiles, or policy, and MUST NOT print any credential value.
+
+#### Scenario: All gates satisfied exits zero
+- **WHEN** a server's config, provider attachment, endpoint, and transport all hold and the user runs `maki-oss mcp status`
+- **THEN** the output names the server with every gate satisfied and the command exits 0
+
+#### Scenario: A failing gate names its fix
+- **WHEN** a server's provider is not attached and the user runs `maki-oss mcp status`
+- **THEN** the output names the attachment as the failing gate, prints the `maki-oss provider attach` command, and the command exits non-zero
+
+#### Scenario: A host server missing from the sandbox is named
+- **WHEN** the host's `~/.config/maki/mcp.toml` enables a server that the sandbox's MCP config does not contain, and the user runs `maki-oss mcp status`
+- **THEN** that server is reported by name as missing from the sandbox with the image-rebuild command, and the command exits non-zero
+
+#### Scenario: No sandbox reports cleanly
+- **WHEN** the user runs `maki-oss mcp status` with no project sandbox
+- **THEN** the command reports no sandbox and exits 0 without attempting sandbox operations
+
+#### Scenario: Report performs no mutation
+- **WHEN** `maki-oss mcp status` runs against a `Ready` sandbox
+- **THEN** no `sandbox create`, `provider attach`, `profile import`, or policy update invocation is recorded, and no credential value appears in the output
+
+### Requirement: Doctor reports MCP readiness
+`maki-oss doctor` SHALL include the MCP readiness table after its existing
+prerequisite checks, reusing the same per-server gate output as
+`maki-oss mcp status`. MCP readiness is not a prerequisite for running Maki, so
+the doctor exit code SHALL be decided only by its prerequisite checks: an MCP
+gate failure SHALL be reported but MUST NOT make doctor exit non-zero.
+
+#### Scenario: Doctor reports an MCP failure without failing
+- **WHEN** a configured MCP server's provider is not attached and the user runs `maki-oss doctor`
+- **THEN** the doctor output includes that server's failing gate, and the doctor exit code is decided by its prerequisite checks alone
+
+#### Scenario: No MCP servers is not a doctor failure
+- **WHEN** the user runs `maki-oss doctor` with no MCP servers configured
+- **THEN** the MCP section reports none configured and the doctor run's exit code is decided by its other checks
