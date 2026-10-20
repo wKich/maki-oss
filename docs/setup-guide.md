@@ -87,19 +87,35 @@ docker run --rm maki-agent:local maki --version
 docker run --rm maki-agent:local ls /sandbox/.config/maki
 ```
 
-Expected: `maki 0.6.4`, and `init.lua` plus `permissions.toml` in the config
-directory. The baked configuration pre-answers folder trust for `/sandbox/**`
-and starts Maki in YOLO mode; the `permissions.toml` deny rules (no `sudo`,
-no `maki auth`, no writes to the baked config) still apply under YOLO. See
+Expected: `maki 0.6.4`, and `init.lua`, `mcp.toml`, and `permissions.toml` in
+the config directory. The baked configuration pre-answers folder trust for
+`/sandbox/**` and starts Maki in YOLO mode; the `permissions.toml` deny rules
+(no `sudo`, no `maki auth`, no writes to the baked config) still apply under
+YOLO. `mcp.toml` carries the MCP servers Maki may call from the sandbox. See
 [`examples/maki-image/config/`](../examples/maki-image/config/).
+
+The same build is what makes an MCP server usable from inside the sandbox — the
+server set is baked at image build, so adding, removing, or changing a server
+in the host's `~/.config/maki/mcp.toml` means rebuilding
+(`maki-oss image build`). Once a project sandbox exists, check what is ready:
+
+```sh
+maki-oss mcp status
+```
+
+The gate-by-gate checklist for getting a server ready — and the failures it
+reports — lives in [`docs/mcp-migration.md`](mcp-migration.md).
 
 ## 4. Model access through a provider profile
 
 Any provider works: OpenShell binds credentials to endpoint hosts regardless of
 vendor, and this repository ships curated profiles for Anthropic, OpenRouter,
-DeepSeek, Synthetic, OpenAI, Google Gemini, Mistral, xAI, Z.AI, OpenCode Zen,
-and OpenCode Go. The catalog, the credential-store mapping, and the wizard
-reference live in [`docs/providers.md`](providers.md).
+DeepSeek, Synthetic, OpenAI, Google Gemini, Mistral, xAI, Z.AI, Kimi, MiniMax,
+NanoGPT, Xiaomi, OpenCode Zen, and OpenCode Go — every profile file, its
+environment variable, and its endpoint are listed in the curated catalog
+below. The catalog, the credential-store mapping, and the wizard reference live
+in [`docs/providers.md`](providers.md). MCP server profiles (`mcp-context7`,
+`mcp-synthetic`) are set up through the MCP step in §3 instead.
 
 The fastest path takes a key you already hold — including the ones Maki and
 OpenCode keep in their own stores — and does the profile lint/import and

@@ -47,8 +47,19 @@ Every profile below names only `/usr/local/bin/maki` (the path used by
 | `maki-xai` | `XAI_API_KEY` | `api.x.ai` | Public API key only; xAI OAuth is not supported |
 | `maki-zai` | `ZHIPU_API_KEY` | `api.z.ai` | Pay-as-you-go |
 | `maki-zai-coding` | `ZHIPU_API_KEY` | `api.z.ai` | Coding plan; see the plan step below |
+| `maki-xiaomi-token-plan-sgp` | `XIAOMI_API_KEY` | `token-plan-sgp.xiaomimimo.com` | Bearer; Singapore region host |
+| `maki-minimax-coding-plan` | `MINIMAX_API_KEY` | `api.minimax.io` | Header `x-api-key`; the endpoint speaks the Anthropic protocol |
+| `maki-kimi-for-coding` | `KIMI_API_KEY` | `api.kimi.ai` | Bearer |
+| `maki-nano-gpt` | `NANO_GPT_API_KEY` | `nano-gpt.com` | Bearer |
 | `maki-opencode` | `OPENCODE_API_KEY` | `opencode.ai` | OpenCode Zen |
 | `maki-opencode-go` | `OPENCODE_API_KEY` | `opencode.ai` | Opencode Go |
+| `mcp-context7` | `CONTEXT7_API_KEY` | `mcp.context7.com` | MCP server profile (`protocol: mcp`); header `x-api-key` |
+| `mcp-synthetic` | `MCP_SYNTHETIC_API_KEY` | `api.synthetic.new` | stdio MCP server profile; upstream API endpoint the server process calls, Bearer |
+
+The two `mcp-*` profiles back MCP servers rather than model calls and are not
+in `catalog.tsv`, so the wizard does not resolve them from a stored slug — set
+them up with `maki-oss provider setup --profile examples/providers/<id>.yaml
+--env <VAR> --yes`. See [`docs/mcp-migration.md`](mcp-migration.md).
 
 The wizard resolves a stored credential to its profile through
 `catalog.tsv`, including aliases such as `opencode:zai-coding-plan` and

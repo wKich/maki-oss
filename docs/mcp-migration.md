@@ -76,7 +76,10 @@ An MCP server works inside the sandbox when all four hold:
    local pipe the gateway never inspects — it is the upstream API endpoint the
    server process calls, `protocol: rest` (for `synthetic`,
    [`examples/providers/mcp-synthetic.yaml`](../examples/providers/mcp-synthetic.yaml)
-   declares `api.synthetic.new:443`, confirmed from the package source). The
+   declares `api.synthetic.new:443`, confirmed from the package source). For an
+   HTTP server the shipped example is
+   [`examples/providers/mcp-context7.yaml`](../examples/providers/mcp-context7.yaml),
+   which declares `mcp.context7.com:443/mcp` as `protocol: mcp`. The
    profile is both the egress rule and the
    narrowest credential boundary OpenShell offers, so there is no separate
    `network_policies` entry to copy and no wildcard host or `tls: skip`. The

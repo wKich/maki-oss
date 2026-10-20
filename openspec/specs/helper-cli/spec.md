@@ -375,23 +375,32 @@ the `--no-sync` path or on commands that did not launch Maki.
 `maki-oss mcp status` SHALL compare the servers enabled in the host's
 `~/.config/maki/mcp.toml` against the servers present in the project sandbox's
 MCP config, and SHALL report one line per server naming each gate that decides
-whether the server works in the sandbox: present in the sandbox config, provider
-attached to the project sandbox, endpoint present in the effective policy, and
-transport supported. A server enabled on the host but absent from the sandbox
-SHALL be reported by name as missing from the sandbox, together with the command
-that rebuilds the image. It SHALL exit non-zero when any server fails a gate,
-and SHALL print the command that fixes each failing gate. When no sandbox exists
+whether the server works in the sandbox. For an HTTP server those gates are:
+present in the sandbox config, provider attached to the project sandbox,
+endpoint present in the effective policy, and transport supported. For a stdio server they are: present in the sandbox
+config, the command named by its
+`command` array present in the sandbox (the runtime gate), and provider
+attached — the endpoint gate is carried by the attached profile, because a
+stdio server's config names no URL. A server enabled on the host but absent
+from the sandbox SHALL be reported by name as missing from the sandbox,
+together with the command that rebuilds the image. It SHALL exit non-zero when
+any server fails a gate, and SHALL print the command that fixes each failing
+gate — for a missing runtime, the image-build command. When no sandbox exists
 for the project, or neither the host config nor the sandbox config declares an
 enabled server, it SHALL report that and exit zero. It SHALL NOT mutate the
 sandbox, gateway, profiles, or policy, and MUST NOT print any credential value.
 
 #### Scenario: All gates satisfied exits zero
-- **WHEN** a server's config, provider attachment, endpoint, and transport all hold and the user runs `maki-oss mcp status`
+- **WHEN** a server's gates for its transport all hold and the user runs `maki-oss mcp status`
 - **THEN** the output names the server with every gate satisfied and the command exits 0
 
 #### Scenario: A failing gate names its fix
 - **WHEN** a server's provider is not attached and the user runs `maki-oss mcp status`
 - **THEN** the output names the attachment as the failing gate, prints the `maki-oss provider attach` command, and the command exits non-zero
+
+#### Scenario: A stdio server missing its runtime names the image-build fix
+- **WHEN** a stdio server is present in both configs but its command is absent from the sandbox, and the user runs `maki-oss mcp status`
+- **THEN** the output names the runtime gate as failing with the missing command and the image-build command as the fix, the command exits non-zero, and no install or image change is attempted
 
 #### Scenario: A host server missing from the sandbox is named
 - **WHEN** the host's `~/.config/maki/mcp.toml` enables a server that the sandbox's MCP config does not contain, and the user runs `maki-oss mcp status`
@@ -404,7 +413,6 @@ sandbox, gateway, profiles, or policy, and MUST NOT print any credential value.
 #### Scenario: Report performs no mutation
 - **WHEN** `maki-oss mcp status` runs against a `Ready` sandbox
 - **THEN** no `sandbox create`, `provider attach`, `profile import`, or policy update invocation is recorded, and no credential value appears in the output
-
 ### Requirement: Doctor reports MCP readiness
 `maki-oss doctor` SHALL include the MCP readiness table after its existing
 prerequisite checks, reusing the same per-server gate output as

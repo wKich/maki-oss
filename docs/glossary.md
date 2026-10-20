@@ -57,3 +57,17 @@ reference pack.
   profiles; a local single-user gateway uses the `default` workspace.
 - **Template** — a reusable sandbox workload definition (image, resources,
   settings) that `openshell sandbox create --template` can instantiate.
+- **MCP config** — Maki's table of MCP servers: `~/.config/maki/mcp.toml` on the
+  host, baked into the image as `/sandbox/.config/maki/mcp.toml` for the
+  sandbox. The sandbox never reads the host's file, so changing the server set
+  means rebuilding the image.
+- **MCP readiness** — the per-server report printed by `maki-oss mcp status`
+  and, as an informational section, by `maki-oss doctor`: for each server
+  whether it is present in the sandbox's MCP config, its provider is attached,
+  its endpoint is in the effective policy (HTTP servers), and its runtime
+  resolves in the sandbox (stdio servers). It is read-only and prints no
+  credential value.
+- **Stdio runtime gate** — the MCP readiness check that the command a stdio
+  server's `command` array names exists in the sandbox. A missing runtime is
+  reported with `maki-oss image build` as the fix; the helper never installs a
+  runtime or package into a running sandbox.

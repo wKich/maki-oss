@@ -308,6 +308,15 @@ maki-oss provider attach maki-anthropic
 maki-oss provider list
 ```
 
+Three more `add` flags pass straight through to `openshell provider create`
+and are for profiles that do not fit the plain from-existing shape: `--config
+KEY=VALUE` (repeatable) sets provider config pairs, `--runtime-credentials`
+creates a provider whose credentials the gateway resolves at runtime rather
+than binding a key held on the host, and `--global-profile` imports the
+profile at platform scope instead of workspace scope. None of them is a
+credential channel — a secret still travels through `--from-existing` or
+`--credential KEY` and the child-process environment.
+
 ### provider setup
 
 The wizard for any provider. It scans the Maki
