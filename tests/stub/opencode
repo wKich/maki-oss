@@ -1,0 +1,15 @@
+#!/bin/sh
+# Stub opencode for tests/run-tests.sh: stands in for the OpenCode TUI
+# attach. Records argv to $STUB_TUI_LOG (falling back to $STUB_LOG) and
+# exits; STUB_OPENCODE_EXIT chooses the exit code (default 0).
+log=${STUB_TUI_LOG:-${STUB_LOG:-}}
+if [ -n "$log" ]; then
+    {
+        printf '%s\n' '---'
+        printf '%s\n' 'stub-opencode'
+        for stub_arg in "$@"; do
+            printf '%s\n' "stub-opencode argv: $stub_arg"
+        done
+    } >> "$log"
+fi
+exit "${STUB_OPENCODE_EXIT:-0}"

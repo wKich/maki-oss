@@ -31,10 +31,10 @@ trap 'cleanup; exit 143' TERM
 STATE=$WORK/state
 CONFIG_HOME=$WORK/config
 LOG=$WORK/argv.log
-mkdir -p "$STATE/sandboxes" "$STATE/providers" "$STATE/notes" "$CONFIG_HOME/maki-openshell"
+mkdir -p "$STATE/sandboxes" "$STATE/providers" "$STATE/notes" "$CONFIG_HOME/maki-oss"
 printf 'Ready\n' > "$STATE/sandboxes/demo"
 printf 'maki-anthropic\n' > "$STATE/providers/demo"
-cat > "$CONFIG_HOME/maki-openshell/config.toml" <<'EOF'
+cat > "$CONFIG_HOME/maki-oss/config.toml" <<'EOF'
 # Deterministic create defaults for the smoke run.
 image = "smoke-image:local"
 policy = "examples/policies/maki-minimal.yaml"

@@ -128,7 +128,7 @@ Exit codes: 0 success, 1 usage error, 2 dependency error, 3 gateway error.
 Configuration is resolved from flags, then MAKI_OSS_<KEY> environment
 variables, then the config file below, then built-in defaults:
 
-  ${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/config.toml
+  ${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/config.toml
 
 See README.md and docs/helper.md for the cookbook.
 EOF
@@ -157,7 +157,7 @@ DEFAULT_WORKDIR=/sandbox/project
 DEFAULT_NAME='maki-{project}'
 
 config_home=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}
-config_file=$config_home/maki-openshell/config.toml
+config_file=$config_home/maki-oss/config.toml
 
 config_image=
 config_policy=
@@ -169,6 +169,7 @@ config_engine=
 config_gateway=
 config_workdir=
 config_model=
+config_tui=
 
 # Parse the config file as data and print `key<TAB>value` lines. The parser
 # accepts `key = "value"`, comments, and blank lines, and reports unknown
@@ -186,6 +187,7 @@ parse_config_file() { # FILE
             known["gateway"] = 1
             known["workdir"] = 1
             known["model"] = 1
+            known["tui"] = 1
             errors = 0
         }
         function problem(message) {
@@ -233,6 +235,7 @@ load_config() {
     config_gateway=
     config_workdir=
     config_model=
+    config_tui=
     if [ ! -f "$config_file" ]; then
         return 0
     fi
@@ -256,6 +259,7 @@ load_config() {
             gateway)      config_gateway=$value ;;
             workdir)      config_workdir=$value ;;
             model)        config_model=$value ;;
+            tui)          config_tui=$value ;;
             '') ;;
             *)
                 config_unknown=$key
@@ -330,6 +334,21 @@ resolved_gateway() {
 
 resolved_model() {
     resolve_setting "$opt_model" "${MAKI_OSS_MODEL:-}" "$config_model" ""
+}
+
+# The interactive TUI (no flag: config/env only). Unset keeps Maki's own TTY
+# session; "opencode" runs the OpenCode TUI against the local bridge. Anything
+# else is a usage error naming the key and the accepted values.
+resolved_tui() {
+    tui_value=$(resolve_setting "" "${MAKI_OSS_TUI:-}" "$config_tui" "")
+    case $tui_value in
+        ''|opencode)
+            printf '%s' "$tui_value"
+            ;;
+        *)
+            die_usage "invalid 'tui' value <$tui_value>: accepted values are \"opencode\" (or leave the key unset for Maki's own TUI)"
+            ;;
+    esac
 }
 
 project_basename=$(basename -- "$PWD")
@@ -761,6 +780,31 @@ cmd_doctor() {
         fi
     fi
 
+    # TUI prerequisites are conditional: checked only when tui resolves to
+    # opencode, so a host without bun or opencode stays healthy by default
+    # (helper-cli: Prerequisite diagnostics).
+    doctor_tui=$(resolved_tui)
+    if [ "$doctor_tui" = opencode ]; then
+        if command -v bun >/dev/null 2>&1; then
+            say "ok    bun: $(command -v bun)"
+        else
+            say "fail  bun: not found on PATH (required by tui = \"opencode\")"
+            doctor_status=$EX_DEP
+        fi
+        if command -v opencode >/dev/null 2>&1; then
+            say "ok    opencode: $(command -v opencode)"
+        else
+            say "fail  opencode: not found on PATH (required by tui = \"opencode\")"
+            doctor_status=$EX_DEP
+        fi
+        if [ -f "$BRIDGE_ENTRYPOINT" ]; then
+            say "ok    bridge entrypoint: $BRIDGE_ENTRYPOINT"
+        else
+            say "fail  bridge entrypoint: $BRIDGE_ENTRYPOINT not found"
+            doctor_status=$EX_DEP
+        fi
+    fi
+
     # MCP readiness is informational: MCP is not a prerequisite for running
     # Maki, so the exit code stays decided by the checks above. It also needs
     # a reachable gateway, so it is skipped when the CLI or gateway is down.
@@ -1086,6 +1130,15 @@ ensure_project_sandbox() {
 
 cmd_maki() {
     [ "$#" -eq 0 ] || die_usage "maki takes no arguments"
+    # OpenCode mode is decided before any sandbox or bridge work so an invalid
+    # value or a refused resume flag never starts a session.
+    maki_tui=$(resolved_tui)
+    if [ "$maki_tui" = opencode ]; then
+        if [ "$opt_continue" -eq 1 ] || [ -n "$opt_resume" ] || [ -n "$opt_session_id" ]; then
+            die_usage "--continue, --resume, and --session-id are unsupported in OpenCode TUI mode (tui = \"opencode\"); unset the tui setting to use Maki's TUI"
+        fi
+        cmd_opencode_tui
+    fi
     require_openshell
     ensure_project_sandbox
     name=$(resolved_name)
@@ -1114,6 +1167,81 @@ cmd_maki() {
         maki_rc=130
     fi
     exit "$maki_rc"
+}
+
+# ---------------------------------------------------------------------------
+# OpenCode TUI mode (tui = "opencode")
+#
+# The helper owns the sandbox lifecycle, the bridge owns the wire (design
+# decision 3): run the existing ensure routine, export the bridge environment,
+# start `bun bridge/...` in the background, wait for its listen line, attach
+# `opencode --server` on the TTY, and on exit kill the bridge — the EXIT trap
+# then runs the usual sync and proposal check (design decision 4: teardown
+# order). No bind mounts, no --env values: everything crosses sandbox stdio.
+# ---------------------------------------------------------------------------
+
+BRIDGE_ENTRYPOINT=$repo_root/bridge/src/bridge.ts
+
+# Prints the port once the bridge's listen line reaches LOGFILE; fails as a
+# dependency error if the bridge dies or goes quiet first.
+wait_for_bridge_port() { # LOGFILE PID
+    wfbp_log=$1
+    wfbp_pid=$2
+    wfbp_attempts=0
+    while :; do
+        wfbp_port=$(sed -n 's|.*bridge listening on http://127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$wfbp_log" 2>/dev/null | head -n 1)
+        if [ -n "$wfbp_port" ]; then
+            printf '%s' "$wfbp_port"
+            return 0
+        fi
+        if ! kill -0 "$wfbp_pid" 2>/dev/null; then
+            sed 's/^/  /' "$wfbp_log" >&2 2>/dev/null || true
+            die_dep "bridge exited before listening; tui = \"opencode\" needs bun and the bridge entrypoint ($BRIDGE_ENTRYPOINT)"
+        fi
+        wfbp_attempts=$((wfbp_attempts + 1))
+        if [ "$wfbp_attempts" -gt 10 ]; then
+            kill "$wfbp_pid" 2>/dev/null || true
+            die_dep "bridge reported no listen address within 10 seconds"
+        fi
+        sleep 1
+    done
+}
+
+cmd_opencode_tui() {
+    require_openshell
+    ensure_project_sandbox
+    ot_name=$(resolved_name)
+    ot_workdir=$(resolved_workdir)
+    ot_model=$(resolved_model)
+    ot_openshell=$(command -v openshell)
+    arm_sync
+    ot_bridge_log=${TMPDIR:-/tmp}/maki-oss-bridge.$$.log
+    ot_bridge_pid=
+    ot_interrupted=0
+    trap 'ot_interrupted=1; if [ -n "$ot_bridge_pid" ]; then kill "$ot_bridge_pid" 2>/dev/null || true; fi' INT TERM
+    ot_rc=0
+    note "Starting the OpenCode TUI bridge..."
+    # PORT stays inherited when the user exported it (documented override);
+    # the attach URL comes from the bridge's listen line either way.
+    (
+        OPENSHELL_BIN=$ot_openshell \
+        OPENMAKI_SANDBOX=$ot_name \
+        OPENMAKI_CWD=$ot_workdir \
+        MAKI_MODEL=$ot_model \
+        bun "$BRIDGE_ENTRYPOINT"
+    ) >"$ot_bridge_log" 2>&1 &
+    ot_bridge_pid=$!
+    ot_port=$(wait_for_bridge_port "$ot_bridge_log" "$ot_bridge_pid")
+    note "Attaching the OpenCode TUI (server http://127.0.0.1:$ot_port)..."
+    opencode --server "http://127.0.0.1:$ot_port" || ot_rc=$?
+    kill "$ot_bridge_pid" 2>/dev/null || true
+    wait "$ot_bridge_pid" 2>/dev/null || true
+    rm -f "$ot_bridge_log"
+    trap - INT TERM
+    if [ "$ot_interrupted" -eq 1 ] && [ "$ot_rc" -eq 0 ]; then
+        ot_rc=130
+    fi
+    exit "$ot_rc"
 }
 
 cmd_run() {
@@ -1673,7 +1801,7 @@ cmd_mcp_status() {
 # ---------------------------------------------------------------------------
 
 profiles_dir=$repo_root/examples/providers
-helper_profiles_dir=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}/maki-openshell/profiles
+helper_profiles_dir=${XDG_CONFIG_HOME:-${HOME:-/tmp}/.config}/maki-oss/profiles
 maki_auth_dir=${HOME:-/tmp}/.local/state/maki/auth
 opencode_auth_file=${HOME:-/tmp}/.local/share/opencode/auth.json
 

@@ -139,7 +139,7 @@ optional API path prefix, validates each field, and fills
 [`examples/providers/template.yaml`](../examples/providers/template.yaml) into:
 
 ```
-${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/profiles/<id>.yaml
+${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/profiles/<id>.yaml
 ```
 
 The generated file contains profile configuration only — never the credential

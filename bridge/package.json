@@ -1,0 +1,13 @@
+{
+  "name": "maki-oss-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/bridge.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "ajv": "^8.20.0"
+  }
+}

@@ -25,7 +25,7 @@ Cross-check against the gateway and the remembered list:
 
 ```sh
 maki-oss provider list
-grep ^providers ~/.config/maki-openshell/config.toml
+grep ^providers ~/.config/maki-oss/config.toml
 ```
 
 Anything in a store that has no gateway provider is un-migrated.
@@ -105,14 +105,14 @@ so attach deliberately (`maki-oss up --provider <name>`), not by habit.
 ```sh
 maki-oss provider list                 # one row per migrated credential
 openshell profile list --type provider --global
-grep ^providers ~/.config/maki-openshell/config.toml
+grep ^providers ~/.config/maki-oss/config.toml
 ```
 
 Each provider row shows `CREDENTIAL_KEYS 1`, never a value. Confirm no secret
 landed in a generated profile or in the config file:
 
 ```sh
-grep -R -l -e 'sk-' -e 'api_key:' ~/.config/maki-openshell/ ; echo "exit=$?"
+grep -R -l -e 'sk-' -e 'api_key:' ~/.config/maki-oss/ ; echo "exit=$?"
 # expect: no matches, exit=1
 ```
 
@@ -155,7 +155,7 @@ Not migrated, deliberately:
   from inside; a provider would be a credential bound to an endpoint that does
   not exist there. Keep it host-side.
 
-All 8 are remembered in `~/.config/maki-openshell/config.toml`, so the next bare
+All 8 are remembered in `~/.config/maki-oss/config.toml`, so the next bare
 `maki-oss` attaches all 8 and widens the sandbox's effective policy by exactly
 those 8 hosts. Trim the list to what a session needs if that is wider than the
 work requires.

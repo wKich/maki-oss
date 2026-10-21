@@ -2,7 +2,7 @@ schema: spec-driven
 
 # Project context (shown to AI when creating artifacts)
 context: |
-  Project: maki-openshell — a toolkit for running Maki (maki.sh) coding agents
+  Project: maki-oss — a toolkit for running Maki (maki.sh) coding agents
   inside NVIDIA OpenShell sandboxes, fully isolated from the host system.
 
   Stack: Markdown documentation; POSIX sh helper script + fish shell plugin;

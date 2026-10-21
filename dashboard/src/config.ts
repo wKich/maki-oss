@@ -1,7 +1,7 @@
 // Dashboard configuration.
 //
 // Create-time defaults come from the helper's config file
-// (`${XDG_CONFIG_HOME:-~/.config}/maki-openshell/config.toml`) so both tools
+// (`${XDG_CONFIG_HOME:-~/.config}/maki-oss/config.toml`) so both tools
 // use the same image, policy, providers, and resources. Parsing is
 // independent of the shell helper and tolerant: unknown keys (validated
 // strictly by the helper) are ignored here because the dashboard only reads
@@ -32,7 +32,7 @@ export interface DashboardConfig {
 export function configFilePath(env: Record<string, string | undefined>): string {
   const home = env.HOME ?? env.USERPROFILE ?? "";
   const base = env.XDG_CONFIG_HOME || join(home || "/tmp", ".config");
-  return join(base, "maki-openshell", "config.toml");
+  return join(base, "maki-oss", "config.toml");
 }
 
 /**

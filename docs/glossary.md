@@ -1,6 +1,6 @@
 # Glossary
 
-Shared vocabulary for the maki-openshell docs. Each term has one definition;
+Shared vocabulary for the maki-oss docs. Each term has one definition;
 the same words are used consistently in `docs/`, `examples/`, and the AI
 reference pack.
 
@@ -21,7 +21,7 @@ reference pack.
   `examples/providers/maki-anthropic.yaml`).
 - **Generated profile** — a custom provider profile written by
   `maki-oss provider setup` under the helper's config directory
-  (`~/.config/maki-openshell/profiles/`); it contains configuration only,
+  (`~/.config/maki-oss/profiles/`); it contains configuration only,
   never a credential value.
 - **Catalog mapping** — `examples/providers/catalog.tsv`, the machine-readable
   table that resolves a credential-store slug (`maki`/`opencode` plus the

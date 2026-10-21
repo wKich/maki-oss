@@ -5,7 +5,7 @@
 //
 // Priority: flags > DASHBOARD_* environment variables > defaults. Create-time
 // defaults (image, policy, providers, cpu, memory) come from
-// ~/.config/maki-openshell/config.toml; see src/config.ts.
+// ~/.config/maki-oss/config.toml; see src/config.ts.
 
 import { createDashboardServer, DEFAULT_HOST, DEFAULT_PORT } from "./server.ts";
 

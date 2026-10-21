@@ -299,7 +299,7 @@ defined once in [`docs/glossary.md`](glossary.md).
   the `maki-oss provider setup` wizard, and custom profiles, and
   [`docs/migrating-providers.md`](migrating-providers.md) migrates credentials
   from Maki and OpenCode stores.
-- The `add-maki-openshell-fish-helper` change builds a `maki-oss` CLI on top of
+- The `add-maki-oss-fish-helper` change builds a `maki-oss` CLI on top of
   these examples; the `add-openshell-bun-dashboard` change visualizes the same
   gateway.
 - For agent-driven setup, use

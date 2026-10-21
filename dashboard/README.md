@@ -59,7 +59,7 @@ process manager; `DASHBOARD_READ_ONLY=1` is the shared/demo setting.
 Create-time defaults come from the same file the `maki-oss` helper uses:
 
 ```
-${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/config.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/config.toml
 ```
 
 The dashboard reads `image`, `policy`, `providers` (comma-separated), `cpu`, and

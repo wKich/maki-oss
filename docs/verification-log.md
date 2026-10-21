@@ -97,7 +97,7 @@ not completed, so `LINEAR_MCP_ACCESS_TOKEN` is unset in the sandbox. Reading
 the environment inside the sandbox:
 
 ```text
-$ openshell sandbox exec -n maki-maki-openshell --no-login-shell -- \
+$ openshell sandbox exec -n maki-maki-oss --no-login-shell -- \
     sh -c 'printf "[%s]\n" "$CONTEXT7_API_KEY"; printf "[%s]\n" "$LINEAR_MCP_ACCESS_TOKEN"'
 [<opaque placeholder ending in _CONTEXT7_API_KEY>]
 []
@@ -126,7 +126,7 @@ it (the profile's endpoint only reaches the effective policy through the
 attached provider):
 
 ```text
-$ openshell sandbox provider detach maki-maki-openshell mcp-context7
+$ openshell sandbox provider detach maki-maki-oss mcp-context7
 $ maki-oss mcp status
   context7: sandbox=ok provider=missing endpoint=missing transport=http
     fix: maki-oss provider attach mcp-context7
@@ -569,9 +569,9 @@ $ maki-oss provider setup --from opencode --credential deepseek --yes
 Imported 1 provider profile.
 ✓ Created provider maki-deepseek
 Provider 'maki-deepseek' created.
-Remembered provider 'maki-deepseek' in ~/.config/maki-openshell/config.toml.
+Remembered provider 'maki-deepseek' in ~/.config/maki-oss/config.toml.
 
-$ cat ~/.config/maki-openshell/config.toml
+$ cat ~/.config/maki-oss/config.toml
 # maki-oss configuration. See the repository examples/config.toml.
 providers = "maki-opencode-go,maki-deepseek"
 ```

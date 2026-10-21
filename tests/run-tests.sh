@@ -92,6 +92,9 @@ new_case() {
     TEST_ENV_VALUE=
     PATH_OVERRIDE=
     FISH_PATH=
+    ENV_TUI=
+    TUI_LOG=
+    OPENCODE_EXIT=
     RC=0
 }
 
@@ -124,6 +127,9 @@ run_maki_with_input() { # STDIN_FILE ARGS...
         STUB_JSON_COMPACT="${JSON_COMPACT:-0}" \
         STUB_CREATE_RACE="${CREATE_RACE:-0}" \
         MAKI_OSS_SANDBOX_NAME="${ENV_NAME:-}" \
+        MAKI_OSS_TUI="${ENV_TUI:-}" \
+        STUB_TUI_LOG="${TUI_LOG:-}" \
+        STUB_OPENCODE_EXIT="${OPENCODE_EXIT:-}" \
         MAKI_OSS_IMAGE="${ENV_IMAGE:-}" \
         MAKI_OSS_POLICY="${ENV_POLICY:-}" \
         MAKI_OSS_PROVIDERS="${ENV_PROVIDERS:-}" \
@@ -178,8 +184,8 @@ seed_sandbox() {
 # Records a provider as configured (config file) and known to the gateway
 # (stub provider list), matching what `provider setup` persists in real use.
 seed_remembered_provider() { # NAME
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell" "$STUB_STATE_DIR"
-    printf 'providers = "%s"\n' "$1" >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss" "$STUB_STATE_DIR"
+    printf 'providers = "%s"\n' "$1" >"$XDG_CONFIG_HOME/maki-oss/config.toml"
     printf '%s\n' "$1" >>"$STUB_STATE_DIR/providers.list"
 }
 
@@ -250,6 +256,25 @@ no_jq_path() {
         fi
     done
     printf '%s' "$STUB_DIR:$no_jq_dir"
+}
+
+# Builds a PATH prefix with the shell tools and CLI stubs the helper needs but
+# without bun or opencode, so the conditional TUI doctor checks can fail.
+no_tui_path() {
+    no_tui_dir=$CASE/no-tui-bin
+    mkdir -p "$no_tui_dir"
+    for no_tui_tool in awk basename cat cut dirname grep head mkdir mktemp mv paste printenv rm sed sleep tr; do
+        no_tui_tool_path=$(command -v "$no_tui_tool" 2>/dev/null) || continue
+        if [ ! -e "$no_tui_dir/$no_tui_tool" ]; then
+            ln -s "$no_tui_tool_path" "$no_tui_dir/$no_tui_tool"
+        fi
+    done
+    for no_tui_stub in openshell docker podman; do
+        if [ ! -e "$no_tui_dir/$no_tui_stub" ]; then
+            ln -s "$STUB_DIR/$no_tui_stub" "$no_tui_dir/$no_tui_stub"
+        fi
+    done
+    printf '%s' "$no_tui_dir"
 }
 
 assert_rc() {
@@ -396,8 +421,8 @@ test_usage_errors() {
 test_config_precedence() {
     begin "configuration precedence: flag > env > config > default"
     new_case precedence
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
-    printf 'sandbox_name = "a"\n' >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
+    printf 'sandbox_name = "a"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
 
     run_maki up
     assert_rc 0
@@ -422,8 +447,8 @@ test_config_precedence() {
 test_config_unknown_key() {
     begin "unknown config key names file and key"
     new_case unknown-key
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
-    printf 'opennshell_path = "/x"\n' >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
+    printf 'opennshell_path = "/x"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
     run_maki status
     assert_rc 1
     assert_err_has "opennshell_path"
@@ -812,6 +837,7 @@ test_mcp_status_stdio_all_gates_satisfied() {
     assert_log_missing "update"
     assert_log_missing "build"
     # No credential material (config environment entry) in the output.
+    # shellcheck disable=SC2016  # the literal ${VAR} placeholder text is the assertion
     assert_secret_absent '${SYNTHETIC_API_KEY}'
     assert_secret_absent 'SYNTHETIC_API_KEY'
 }
@@ -839,6 +865,7 @@ test_mcp_status_stdio_missing_runtime_names_build_fix() {
     assert_log_missing "import"
     assert_log_missing "update"
     assert_log_missing "build"
+    # shellcheck disable=SC2016  # the literal ${VAR} placeholder text is the assertion
     assert_secret_absent '${SYNTHETIC_API_KEY}'
     assert_secret_absent 'SYNTHETIC_API_KEY'
 }
@@ -1064,9 +1091,9 @@ test_provider_setup_curated() {
 test_provider_memory() {
     begin "provider setup remembers names and model without rewriting comments"
     new_case provider-memory
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
     printf '# keep this comment\nimage = "custom:tag"\n\nproviders = "already-there"\n' \
-        >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+        >"$XDG_CONFIG_HOME/maki-oss/config.toml"
     seed_maki_store opencode-go "fixture-memory-key"
     CREDENTIAL_ENV=OPENCODE_API_KEY
     CREDENTIAL_LOG=$CASE/credential-env.log
@@ -1074,7 +1101,7 @@ test_provider_memory() {
     run_maki_stdin "opencode-go/deepseek-v4.1-flash" provider setup \
         --from maki --credential opencode-go --yes
     assert_rc 0
-    config=$XDG_CONFIG_HOME/maki-openshell/config.toml
+    config=$XDG_CONFIG_HOME/maki-oss/config.toml
     grep -Fq '# keep this comment' "$config" || bad "comment was not preserved"
     grep -Fq 'image = "custom:tag"' "$config" || bad "unrelated key was not preserved"
     grep -Fxq 'providers = "already-there,maki-opencode-go"' "$config" \
@@ -1292,7 +1319,7 @@ test_provider_setup_custom_generation() {
 
     run_maki_stdin "1\n\n\napi.acme-router.test\n/v1\n" provider setup --yes
     assert_rc 0
-    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
+    generated=$XDG_CONFIG_HOME/maki-oss/profiles/maki-acme-router.yaml
     if [ ! -f "$generated" ]; then
         bad "generated profile not found: $generated"
     else
@@ -1314,8 +1341,8 @@ test_provider_setup_custom_generation() {
 test_provider_setup_custom_preserved() {
     begin "declining overwrite preserves the generated profile"
     new_case setup-custom-keep
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell/profiles"
-    keep=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss/profiles"
+    keep=$XDG_CONFIG_HOME/maki-oss/profiles/maki-acme-router.yaml
     write_fixture_profile "$keep" maki-acme-router ACME_ROUTER_API_KEY
     seed_maki_store acme-router "fixture-keep-key"
     CREDENTIAL_ENV=ACME_ROUTER_API_KEY
@@ -1362,7 +1389,7 @@ test_provider_setup_credential_non_exposure() {
     assert_rc 0
     assert_credential_env "$value"
     assert_secret_absent "$value"
-    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/maki-acme-router.yaml
+    generated=$XDG_CONFIG_HOME/maki-oss/profiles/maki-acme-router.yaml
     if [ -f "$generated" ] && grep -Fq -- "$value" "$generated"; then
         bad "generated profile contains the credential value"
     fi
@@ -1390,7 +1417,7 @@ test_provider_setup_custom_validation() {
 
     run_maki_stdin "1\nBad ID\ngood-provider\n\nbad host\napi.good.test\n\n" provider setup --yes
     assert_rc 0
-    generated=$XDG_CONFIG_HOME/maki-openshell/profiles/good-provider.yaml
+    generated=$XDG_CONFIG_HOME/maki-oss/profiles/good-provider.yaml
     if [ ! -f "$generated" ]; then
         bad "valid custom profile was not generated after invalid input"
     else
@@ -1529,6 +1556,180 @@ test_session_flag_conflicts() {
     assert_log_missing "exec"
 }
 
+test_tui_config_key() {
+    begin "tui config key: unset keeps the Maki TUI, opencode bridges, env overrides the file, other values fail"
+    new_case tui-key
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-oss"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+
+    # unset: byte-for-byte the Maki TTY session, no bridge started
+    run_maki maki
+    assert_rc 0
+    assert_log_has "exec"
+    assert_log_line "--tty"
+    assert_log_missing "stub-bun"
+    assert_log_missing "stub-opencode"
+
+    # tui = "opencode": the bridge and the TUI attach instead
+    printf 'tui = "opencode"\n' >>"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    reset_log
+    run_maki maki
+    assert_rc 0
+    assert_log_has "stub-bun start"
+    assert_log_has "stub-opencode"
+    assert_log_missing "--tty"
+
+    # MAKI_OSS_TUI overrides the file: opencode in the environment bridges
+    # even with the key unset
+    printf 'providers = "maki-stub"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    reset_log
+    ENV_TUI=opencode
+    run_maki maki
+    assert_rc 0
+    assert_log_has "stub-bun start"
+    assert_log_has "stub-opencode"
+    ENV_TUI=
+
+    # any other value is a usage error naming the key and the values
+    printf 'tui = "vim"\n' >>"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    reset_log
+    run_maki maki
+    assert_rc 1
+    assert_err_has "tui"
+    assert_err_has "opencode"
+    assert_log_missing "exec"
+    assert_log_missing "stub-bun"
+}
+
+test_tui_resume_flags_refused() {
+    begin "OpenCode TUI mode refuses session flags while run keeps them"
+    new_case tui-flags
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-oss"
+    seed_sandbox maki-myproject Ready
+    seed_remembered_provider maki-stub
+    attach_stub_provider maki-myproject maki-stub
+    printf 'providers = "maki-stub"\ntui = "opencode"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+
+    run_maki --continue
+    assert_rc 1
+    assert_err_has "OpenCode TUI mode"
+    assert_log_missing "exec"
+    assert_log_missing "stub-bun"
+
+    reset_log
+    run_maki maki --resume CgADMGeR7WnHDw7NJRUfN
+    assert_rc 1
+    assert_err_has "OpenCode TUI mode"
+    assert_log_missing "exec"
+    assert_log_missing "stub-bun"
+
+    reset_log
+    run_maki maki --session-id ci-run-42
+    assert_rc 1
+    assert_err_has "OpenCode TUI mode"
+    assert_log_missing "exec"
+
+    # run is unaffected by tui and keeps the headless resume path
+    reset_log
+    run_maki run --continue "keep going"
+    assert_rc 0
+    assert_log_has "exec"
+    assert_log_line "--continue"
+    assert_log_missing "stub-bun"
+
+    # without the tui setting the session flags keep working
+    printf 'providers = "maki-stub"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    reset_log
+    run_maki maki --continue
+    assert_rc 0
+    assert_log_has "exec"
+    assert_log_line "--tty"
+    assert_log_line "--continue"
+    assert_log_missing "stub-bun"
+}
+
+test_opencode_tui_session() {
+    begin "OpenCode mode: ensure, bridge start, TUI attach, bridge kill, sync"
+    new_case tui-session
+    RUN_DIR=$CASE/project/myproject
+    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-oss"
+    seed_remembered_provider maki-stub
+    printf 'providers = "maki-stub"\ntui = "opencode"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    TUI_LOG=$LOG
+
+    run_maki
+    assert_rc 0
+    assert_log_has "create"
+    assert_log_has "upload"
+    assert_log_has "stub-bun start"
+    assert_log_has "stub-opencode"
+    assert_log_has "stub-bun SIGTERM"
+    assert_log_has "download"
+    assert_log_before "create" "stub-bun start"
+    assert_log_before "stub-bun start" "stub-opencode"
+    assert_log_before "stub-opencode" "stub-bun SIGTERM"
+    assert_log_before "stub-bun SIGTERM" "download"
+    # the bridge runs maki in the same project sandbox, with no --env value
+    assert_log_has "stub-bun env: OPENMAKI_SANDBOX=maki-myproject"
+    assert_log_has "OPENMAKI_CWD=/sandbox/project"
+    assert_log_missing "--env"
+    # the TUI is attached on the TTY against the bridge's loopback URL
+    assert_log_has "stub-opencode argv: --server"
+    assert_log_has "stub-opencode argv: http://127.0.0.1:4698"
+    assert_log_missing "--tty"
+    assert_err_has "Starting the OpenCode TUI bridge"
+    assert_err_has "Attaching the OpenCode TUI"
+
+    # --no-sync keeps the flow but skips the download
+    reset_log
+    run_maki --no-sync
+    assert_rc 0
+    assert_log_has "stub-bun SIGTERM"
+    assert_log_missing "download"
+    assert_err_has "Skipped download (--no-sync)"
+}
+
+test_doctor_tui_checks() {
+    begin "doctor checks bun, opencode, and the bridge only when tui is opencode"
+    new_case doctor-tui
+    PROVIDER_NAMES=maki-anthropic
+
+    # unset: no TUI lines at all
+    run_maki doctor --provider maki-anthropic
+    assert_rc 0
+    assert_out_missing "bun:"
+    assert_out_missing "opencode:"
+    assert_out_missing "bridge entrypoint:"
+
+    # opencode with everything present: three ok lines, exit 0
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
+    printf 'tui = "opencode"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    run_maki doctor --provider maki-anthropic
+    assert_rc 0
+    assert_out_has "ok    bun:"
+    assert_out_has "ok    opencode:"
+    assert_out_has "ok    bridge entrypoint:"
+
+    # opencode without bun or opencode on PATH: named failures, exit 2
+    PATH_OVERRIDE=$(no_tui_path)
+    run_maki doctor --provider maki-anthropic
+    assert_rc 2
+    assert_out_has "fail  bun: not found on PATH"
+    assert_out_has "fail  opencode: not found on PATH"
+    PATH_OVERRIDE=
+
+    # an invalid value fails the command naming the key and the values
+    printf 'tui = "vim"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
+    run_maki doctor
+    assert_rc 1
+    assert_err_has "tui"
+    assert_err_has "opencode"
+}
+
 test_session_creates_uploads_and_syncs() {
     begin "bare maki-oss creates, uploads, runs, and syncs back in order"
     new_case session-create
@@ -1620,7 +1821,7 @@ test_session_inline_bootstrap() {
     assert_log_has "exec"
     assert_log_line "--tty"
     assert_log_has "download"
-    grep -Fq 'providers = "maki-opencode-go"' "$XDG_CONFIG_HOME/maki-openshell/config.toml" \
+    grep -Fq 'providers = "maki-opencode-go"' "$XDG_CONFIG_HOME/maki-oss/config.toml" \
         || bad "bootstrap did not remember the provider"
     if [ ! -e "$STUB_STATE_DIR/sandboxes/maki-myproject" ]; then
         bad "sandbox was not created after the bootstrap"
@@ -1646,8 +1847,8 @@ test_session_unknown_gateway_provider() {
     begin "remembered provider missing from the gateway fails before create"
     new_case session-missing-provider
     RUN_DIR=$CASE/project/myproject
-    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-openshell"
-    printf 'providers = "maki-ghost"\n' >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    mkdir -p "$RUN_DIR" "$XDG_CONFIG_HOME/maki-oss"
+    printf 'providers = "maki-ghost"\n' >"$XDG_CONFIG_HOME/maki-oss/config.toml"
 
     run_maki
     assert_rc 1
@@ -1687,9 +1888,9 @@ test_session_model_precedence() {
     mkdir -p "$RUN_DIR"
     seed_sandbox maki-myproject Ready
     attach_stub_provider maki-myproject maki-stub
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
     printf 'providers = "maki-stub"\nmodel = "config/model"\n' \
-        >"$XDG_CONFIG_HOME/maki-openshell/config.toml"
+        >"$XDG_CONFIG_HOME/maki-oss/config.toml"
     printf 'maki-stub\n' >>"$STUB_STATE_DIR/providers.list"
 
     run_maki run "one"
@@ -2214,8 +2415,8 @@ test_fish_completions() {
 test_example_config() {
     begin "examples/config.toml is accepted unchanged"
     new_case example-config
-    mkdir -p "$XDG_CONFIG_HOME/maki-openshell"
-    cp "$ROOT/examples/config.toml" "$XDG_CONFIG_HOME/maki-openshell/config.toml"
+    mkdir -p "$XDG_CONFIG_HOME/maki-oss"
+    cp "$ROOT/examples/config.toml" "$XDG_CONFIG_HOME/maki-oss/config.toml"
     run_maki up
     assert_rc 0
     assert_log_has "--provider"
@@ -2306,6 +2507,10 @@ run_test test_run_model_flag
 run_test test_maki_resume
 run_test test_run_resume_flags
 run_test test_session_flag_conflicts
+run_test test_tui_config_key
+run_test test_tui_resume_flags_refused
+run_test test_opencode_tui_session
+run_test test_doctor_tui_checks
 run_test test_session_creates_uploads_and_syncs
 run_test test_session_reuses_without_upload
 run_test test_session_reuse_announces_overwrite

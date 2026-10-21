@@ -1,5 +1,5 @@
 {
-  "name": "maki-openshell-dashboard",
+  "name": "maki-oss-dashboard",
   "private": true,
   "type": "module",
   "scripts": {

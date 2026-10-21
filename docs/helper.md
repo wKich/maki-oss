@@ -58,7 +58,7 @@ Settings resolve in this order (first non-empty wins):
 
 1. command-line flags (`--image`, `--provider`, ...);
 2. `MAKI_OSS_<KEY>` environment variables;
-3. the config file at `${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/config.toml`;
+3. the config file at `${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/config.toml`;
 4. built-in defaults.
 
 [`examples/config.toml`](../examples/config.toml) documents every supported
@@ -79,6 +79,7 @@ strings; `providers` is a comma-separated list.
 | `gateway` | `MAKI_OSS_GATEWAY` | empty | OpenShell gateway name (`-g`) |
 | `workdir` | `MAKI_OSS_WORKDIR` | `/sandbox/project` | In-sandbox project directory used by `upload`, `download`, `maki`, and `run` |
 | `model` | `MAKI_OSS_MODEL` | empty | Default model passed to Maki (`provider/model`); `--model` overrides it |
+| `tui` | `MAKI_OSS_TUI` | empty | Interactive TUI for bare `maki-oss` and `maki-oss maki`: empty keeps Maki's own TUI, `opencode` runs the OpenCode TUI against the local bridge; any other value is a usage error. `run` ignores it |
 
 `MAKI_VERSION` (or `--maki-version`) sets the Maki release version passed to
 `image build`; when unset, the Dockerfile default applies.
@@ -98,7 +99,10 @@ exit code.
 Checks the `openshell` CLI, gateway connectivity, the configured container
 engine, image presence, the policy file, and that configured provider names
 exist. Prints one line per check and exits non-zero when any check fails.
-When the CLI is missing the suite does not attempt gateway operations.
+When the CLI is missing the suite does not attempt gateway operations. When
+the `tui` setting resolves to `opencode` it additionally checks `bun`, the
+`opencode` binary, and the bridge entrypoint; those checks are skipped (and
+never fail the run) when the setting is unset.
 
 ```sh
 maki-oss doctor
@@ -175,6 +179,39 @@ maki-oss             # ensure + interactive Maki + sync back
 maki-oss --continue  # resume the most recent session in the sandbox
 maki-oss --no-sync   # leave changes in the sandbox only
 ```
+
+#### OpenCode TUI mode (`tui = "opencode"`)
+
+Setting `tui = "opencode"` in the config file (or `MAKI_OSS_TUI=opencode` in
+the environment) changes bare `maki-oss` and `maki-oss maki` to run the
+OpenCode TUI against a local opencode-tui-bridge instead of Maki's own TUI.
+The bridge is a Bun server in `bridge/` that serves OpenCode's HTTP+SSE
+contract over one live Maki SDK session in the same project sandbox: Maki
+still runs only inside the sandbox, reached over `openshell sandbox exec`
+stdio, with no bind mounts and no `--env` values. The session keeps the
+shared lifecycle — the same ensure step, the same `model` setting, and the
+same exit sync back into the project directory.
+
+```sh
+# one-time host prerequisites for this mode
+bun --version
+opencode --version
+
+# config.toml: tui = "opencode"
+cd ~/code/myproject
+maki-oss              # ensure + bridge + OpenCode TUI + sync back
+maki-oss --no-sync    # same, without the exit download
+```
+
+The mode requires `bun` (to run the bridge) and the `opencode` binary on the
+host; `maki-oss doctor` checks all three only when the setting resolves to
+`opencode`. The bridge binds `127.0.0.1` and is killed when the TUI exits,
+including Ctrl-C. Session resume flags (`--continue`, `--resume`,
+`--session-id`) are refused in this mode — a bridge session has no
+replayable transcript yet — and `maki-oss run` is unaffected by the
+setting. Known rendering defects (message order and the status-line model
+name) are recorded in the `add-opencode-tui-bridge` change's
+[`evidence/known-defects.md`](../openspec/changes/add-opencode-tui-bridge/evidence/known-defects.md).
 
 ### run
 
@@ -324,7 +361,7 @@ The wizard for any provider. It scans the Maki
 credential stores, or reads a JSON file, a host environment variable, or a
 hidden prompt, then resolves a profile — curated catalog, `--profile FILE`, or
 interactive custom generation into
-`${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/profiles/`. Every profile is
+`${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/profiles/`. Every profile is
 linted before `profile import --global`, and the provider is created when
 absent or updated with `provider update --from-existing` when present.
 Attachment (`sandbox provider attach --wait`) is offered at the end, or forced
@@ -509,6 +546,13 @@ Two boundaries are deliberate deferrals, recorded in the
   cache an agent creates in the sandbox is copied to the host at full size.
   Gitignore filtering on upload only prevents host-side dependency
   directories from entering; it does not catch files born inside the sandbox.
+- **OpenCode TUI mode (`tui = "opencode"`) has known rendering defects.**
+  User prompts render after the assistant responses they caused
+  (A-A-A-Q-Q-Q) and the status line shows a synthesized model name instead of
+  Maki's real model. Both are recorded with their captures in the
+  `add-opencode-tui-bridge` change's
+  [`evidence/known-defects.md`](../openspec/changes/add-opencode-tui-bridge/evidence/known-defects.md)
+  and belong to a later change; Maki's own TUI (the default) is unaffected.
 
 ## Manual verification
 
@@ -527,16 +571,16 @@ ok    providers: maki-anthropic
 (exit 0)
 
 $ maki-oss up --provider maki-anthropic
-Creating sandbox 'maki-maki-openshell' from maki-agent:local...
-Created sandbox: maki-maki-openshell
+Creating sandbox 'maki-maki-oss' from maki-agent:local...
+Created sandbox: maki-maki-oss
 (exit 0)
 
 $ maki-oss up --provider maki-anthropic     # idempotent
-Sandbox 'maki-maki-openshell' already exists (phase: Ready).
+Sandbox 'maki-maki-oss' already exists (phase: Ready).
 (exit 0)
 
 $ maki-oss status
-Sandbox:   maki-maki-openshell
+Sandbox:   maki-maki-oss
 Exists:    yes
 Phase:     Ready
 Image:     maki-agent:local (configured)
@@ -554,8 +598,8 @@ $ maki-oss run "Reply with OK."
 exits 0; the helper did not rewrite stdout)
 
 $ maki-oss stop && maki-oss up
-Starting sandbox 'maki-maki-openshell' (phase: Stopped)...
-✓ Started sandbox maki-maki-openshell
+Starting sandbox 'maki-maki-oss' (phase: Stopped)...
+✓ Started sandbox maki-maki-oss
 (exit 0; no second sandbox was created)
 ```
 

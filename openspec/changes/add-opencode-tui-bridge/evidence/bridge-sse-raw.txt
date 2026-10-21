@@ -1,0 +1,52 @@
+data: {"id":"evt_gQnVmcA63MQSU6ro","type":"server.connected","data":{}}
+
+data: {"id":"evt_tTJA4yzgQQ5MNHCw","created":1792533323349,"type":"session.execution.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":0,"version":1}}
+
+data: {"id":"evt_rLXJVSE7ABUM8ta9","created":1792533323349,"type":"session.step.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_Z1ZHAsEqXH4Zcygh3Q16Rs","agent":"sample","model":{"providerID":"sample","id":"sample"},"started":1792533323349},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":1,"version":1}}
+
+data: {"id":"evt_rJvkjGHMRHNeF2qF","created":1792533323349,"type":"session.text.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_Z1ZHAsEqXH4Zcygh3Q16Rs","ordinal":0},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":2,"version":1}}
+
+data: {"id":"evt_wLPBdjNVn18MbKko","created":1792533323349,"type":"session.text.delta","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_Z1ZHAsEqXH4Zcygh3Q16Rs","ordinal":0,"delta":"PONG"}}
+
+data: {"id":"evt_4hdjb5FEvd1Wgv16","created":1792533323349,"type":"session.text.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_Z1ZHAsEqXH4Zcygh3Q16Rs","ordinal":0,"text":"PONG"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":3,"version":1}}
+
+data: {"id":"evt_nH7Hth9jtPoZrFpF","created":1792533323350,"type":"session.step.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_Z1ZHAsEqXH4Zcygh3Q16Rs","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":4,"version":1}}
+
+data: {"id":"evt_XKz2JVYNznAPStht","created":1792533323350,"type":"session.execution.succeeded","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":5,"version":1}}
+
+data: {"id":"evt_xRuMrpijV6wxPaQV","created":1792533343521,"type":"session.execution.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":6,"version":1}}
+
+data: {"id":"evt_g7uHQeQqvFuverRK","created":1792533343521,"type":"session.step.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","agent":"sample","model":{"providerID":"sample","id":"sample"},"started":1792533343521},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":7,"version":1}}
+
+data: {"id":"evt_oP7z38EjCNLJo3jt","created":1792533343527,"type":"session.tool.input.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","id":"toolu_fake000001","name":"bash"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":8,"version":1}}
+
+data: {"id":"evt_j9L2sDUMCfFrKdyD","created":1792533343527,"type":"session.tool.input.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","id":"toolu_fake000001","text":"{\"command\":\"false\"}"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":9,"version":1}}
+
+data: {"id":"evt_uGVvQr6ADWj4dm6U","created":1792533343527,"type":"session.tool.called","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","id":"toolu_fake000001","input":{"command":"false"}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":10,"version":1}}
+
+data: {"id":"evt_STLmW6z5dqwEfG2j","created":1792533343527,"type":"session.tool.failed","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","id":"toolu_fake000001","error":{"type":"Error","message":"Exit code: 1"}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":11,"version":2}}
+
+data: {"id":"evt_CfCYZyUYRQzr89ex","created":1792533343527,"type":"session.step.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_y32kF4QPiDk3XpZR72nscy","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":12,"version":1}}
+
+data: {"id":"evt_JCqnBudHeiGzq84v","created":1792533343527,"type":"session.execution.succeeded","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":13,"version":1}}
+
+data: {"id":"evt_mXGN82sXirwUZrgu","created":1792533363593,"type":"session.execution.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":14,"version":1}}
+
+data: {"id":"evt_3SCWFSCGurKAvPQ7","created":1792533363593,"type":"session.step.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","agent":"sample","model":{"providerID":"sample","id":"sample"},"started":1792533363593},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":15,"version":1}}
+
+data: {"id":"evt_FoHeRe76EYwCwnV7","created":1792533363594,"type":"permission.asked","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"id":"per_FFZeBt1mGvHxM7wjHnLeH7","sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","action":"allow","resources":["Bash"],"save":["once"],"message":"Maki wants to run: Bash {\"command\":\"rm -f /tmp/maki-bridge-perm.txt\"}","source":{"type":"tool","messageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","id":"toolu_fake000002"}}}
+
+data: {"id":"evt_1yMPBmciVUu1K5Zr","created":1792533363606,"type":"permission.replied","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","requestID":"per_FFZeBt1mGvHxM7wjHnLeH7","reply":"once"}}
+
+data: {"id":"evt_F8Keyx7Q4vR3Z9iJ","created":1792533363613,"type":"session.tool.input.started","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","id":"toolu_fake000002","name":"bash"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":16,"version":1}}
+
+data: {"id":"evt_QbVAk45BMe1ZDTto","created":1792533363613,"type":"session.tool.input.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","id":"toolu_fake000002","text":"{\"command\":\"rm -f /tmp/maki-bridge-perm.txt\"}"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":17,"version":1}}
+
+data: {"id":"evt_j18978qA8B8qqqPY","created":1792533363613,"type":"session.tool.called","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","id":"toolu_fake000002","input":{"command":"rm -f /tmp/maki-bridge-perm.txt"}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":18,"version":1}}
+
+data: {"id":"evt_XJ5bKiWuJwQA6N7F","created":1792533363613,"type":"session.tool.success","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","id":"toolu_fake000002","content":[{"type":"text","text":"ok"}]},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":19,"version":2}}
+
+data: {"id":"evt_GkjoDUDTh82J2tHC","created":1792533363613,"type":"session.step.ended","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","assistantMessageID":"msg_CaWvHUGXUAw3rEkH3NM5JZ","finish":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":20,"version":1}}
+
+data: {"id":"evt_1NW2zgjoHFVrMwqr","created":1792533363613,"type":"session.execution.succeeded","location":{"directory":"/Users/ki/Projects/experiments/maki-openshell"},"data":{"sessionID":"ses_ea4b021c0ffesQ46fnhAo5cW7X"},"durable":{"aggregateID":"ses_ea4b021c0ffesQ46fnhAo5cW7X","seq":21,"version":1}}
+

@@ -129,8 +129,8 @@ mismatch.
 Clone this repository and work from its root:
 
 ```sh
-git clone <repository-url> maki-openshell
-cd maki-openshell
+git clone <repository-url> maki-oss
+cd maki-oss
 ```
 
 Run the executable preflight. On a fresh machine the image check fails until
@@ -185,7 +185,7 @@ Choose exactly one primary path per shell; verify it before moving on.
 (for example in `~/.zshrc`):
 
 ```sh
-export PATH="/absolute/path/to/maki-openshell/bin:$PATH"
+export PATH="/absolute/path/to/maki-oss/bin:$PATH"
 ```
 
 **fish** — from the repository root, let the helper symlink its own function

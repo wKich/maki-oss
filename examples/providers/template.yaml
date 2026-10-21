@@ -3,7 +3,7 @@
 # This is a valid, inert profile: it lints cleanly and grants nothing useful
 # until you replace the placeholders. `maki-oss provider setup` fills it for
 # custom providers and writes the result to
-# ${XDG_CONFIG_HOME:-$HOME/.config}/maki-openshell/profiles/<id>.yaml.
+# ${XDG_CONFIG_HOME:-$HOME/.config}/maki-oss/profiles/<id>.yaml.
 #
 # To copy it by hand (kebab-case id, your endpoint host, your credential
 # environment variable):

@@ -29,7 +29,7 @@ const testConfig: DashboardConfig = {
   providers: ["maki-anthropic"],
   cpu: "2",
   memory: "4Gi",
-  configPath: "/home/test/.config/maki-openshell/config.toml",
+  configPath: "/home/test/.config/maki-oss/config.toml",
 };
 
 let workDir: string;

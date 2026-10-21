@@ -13,7 +13,7 @@ test:
 	tests/run-tests.sh
 
 lint:
-	shellcheck bin/maki-oss tests/run-tests.sh tests/stub/openshell tests/stub/docker
+	shellcheck bin/maki-oss tests/run-tests.sh tests/stub/openshell tests/stub/docker tests/stub/bun tests/stub/opencode
 	fish -n fish/functions/maki-oss.fish
 	fish -n fish/conf.d/maki-oss.fish
 	fish -n fish/completions/maki-oss.fish

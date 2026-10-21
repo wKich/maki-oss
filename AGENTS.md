@@ -1,4 +1,4 @@
-# maki-openshell agent instructions
+# maki-oss agent instructions
 
 This repository documents and automates running Maki coding agents inside
 NVIDIA OpenShell sandboxes. The sandbox is the security boundary; all work in

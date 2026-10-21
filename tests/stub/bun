@@ -1,0 +1,30 @@
+#!/bin/sh
+# Stub bun for tests/run-tests.sh: stands in for the OpenCode TUI bridge.
+# Records argv and the bridge environment to $STUB_TUI_LOG (falling back to
+# $STUB_LOG), prints the bridge's listen line, and stays alive until SIGTERM,
+# recording the signal so tests can assert the helper's teardown order.
+log=${STUB_TUI_LOG:-${STUB_LOG:-}}
+if [ -n "$log" ]; then
+    {
+        printf '%s\n' '---'
+        printf '%s\n' 'stub-bun start'
+        for stub_arg in "$@"; do
+            printf '%s\n' "stub-bun argv: $stub_arg"
+        done
+        printf '%s\n' "stub-bun env: OPENMAKI_SANDBOX=${OPENMAKI_SANDBOX:-} OPENMAKI_CWD=${OPENMAKI_CWD:-} MAKI_MODEL=${MAKI_MODEL:-} OPENSHELL_BIN=${OPENSHELL_BIN:-} PORT=${PORT:-}"
+    } >> "$log"
+fi
+
+stub_bun_on_term() {
+    if [ -n "$log" ]; then
+        printf '%s\n' 'stub-bun SIGTERM' >> "$log"
+    fi
+    exit 0
+}
+trap stub_bun_on_term TERM
+
+printf 'bridge listening on http://127.0.0.1:%s (canonical: %s)\n' \
+    "${PORT:-4698}" "${OPENMAKI_CWD:-}"
+while :; do
+    sleep 1
+done
