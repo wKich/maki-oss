@@ -210,8 +210,10 @@ including Ctrl-C. Session resume flags (`--continue`, `--resume`,
 `--session-id`) are refused in this mode — a bridge session has no
 replayable transcript yet — and `maki-oss run` is unaffected by the
 setting. Known rendering defects (message order and the status-line model
-name) are recorded in the `add-opencode-tui-bridge` change's
-[`evidence/known-defects.md`](../openspec/changes/add-opencode-tui-bridge/evidence/known-defects.md).
+name) are recorded in the archived `add-opencode-tui-bridge` change's
+[`evidence/known-defects.md`](../openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/known-defects.md);
+the machine-checked compatibility picture (served routes, wire features, and
+the pinned versions) is generated at [`compatibility.md`](compatibility.md).
 
 ### run
 
@@ -551,7 +553,7 @@ Two boundaries are deliberate deferrals, recorded in the
   (A-A-A-Q-Q-Q) and the status line shows a synthesized model name instead of
   Maki's real model. Both are recorded with their captures in the
   `add-opencode-tui-bridge` change's
-  [`evidence/known-defects.md`](../openspec/changes/add-opencode-tui-bridge/evidence/known-defects.md)
+  [`evidence/known-defects.md`](../openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/known-defects.md)
   and belong to a later change; Maki's own TUI (the default) is unaffected.
 
 ## Manual verification

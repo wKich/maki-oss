@@ -1,0 +1,61 @@
+{
+  "routes": [
+    { "route": "GET /api/event", "status": "served-live", "evidence": "bridge/test/contract.test.ts" },
+    { "route": "POST /api/session", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/session", "status": "served-live", "evidence": "openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/api-check.log" },
+    { "route": "GET /api/session/{sessionID}", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "DELETE /api/session/{sessionID}", "status": "served-live", "evidence": "bridge/test/session-api.test.ts" },
+    { "route": "POST /api/session/{sessionID}/prompt", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/session/{sessionID}/permission", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "POST /api/session/{sessionID}/permission/{requestID}/reply", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "POST /api/session/{sessionID}/model", "status": "served-live", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "POST /api/session/{sessionID}/agent", "status": "served-live", "evidence": "bridge/src/bridge.ts" },
+
+    { "route": "GET /api/info", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/model", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/agent", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/project", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/location", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/fs/list", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/config", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/command", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/reference", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/skill", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/provider", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/integration", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/mcp", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/mcp/resource", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/plugin", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/vcs", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/shell", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/form", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/experimental/migration/v1", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/session/active", "status": "served-faked", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+
+    { "route": "GET /api/session/{sessionID}/form", "status": "deferred", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/session/{sessionID}/terminal", "status": "deferred", "evidence": "bridge/test/fixtures/bridge-requests.jsonl" },
+    { "route": "GET /api/session/{sessionID}/message", "status": "deferred", "evidence": "bridge/src/spec-answers.ts" },
+    { "route": "GET /api/session/{sessionID}/inbox", "status": "deferred", "evidence": "bridge/src/spec-answers.ts" },
+    { "route": "POST /api/session/{sessionID}/fork", "status": "deferred", "evidence": "bridge/src/bridge.ts" }
+  ],
+  "features": [
+    { "id": "sse-handshake", "title": "SSE stream starts with server.connected", "status": "verified", "evidence": "bridge/test/contract.test.ts" },
+    { "id": "sse-bare-data-frames", "title": "SSE frames are bare data: lines (no event:/id: lines)", "status": "verified", "evidence": "bridge/test/contract.test.ts" },
+    { "id": "minted-id-patterns", "title": "Minted ids match the OpenCode patterns (evt_/ses_/msg_/per_)", "status": "verified", "evidence": "bridge/test/contract.test.ts" },
+    { "id": "durable-envelope", "title": "Durable events carry a complete durable envelope keyed to the session", "status": "verified", "evidence": "bridge/test/contract.test.ts" },
+    { "id": "openapi-contract", "title": "Response bodies validate against the vendored OpenAPI 2.0.32", "status": "verified", "evidence": "bridge/test/contract.test.ts" },
+    { "id": "session-crud", "title": "Session create/read/list/delete with child teardown (no orphan processes)", "status": "verified", "evidence": "bridge/test/session-api.test.ts" },
+    { "id": "prompt-translation", "title": "Recorded Maki turns translate to the committed golden frames", "status": "verified", "evidence": "bridge/test/golden.test.ts" },
+    { "id": "tool-failure-mapping", "title": "Failing and permission-denied tools map to session.tool.failed", "status": "verified", "evidence": "bridge/test/session-api.test.ts" },
+    { "id": "permission-round-trip", "title": "Permission ask/reply round trip runs offline over the child seam", "status": "verified", "evidence": "bridge/test/session-api.test.ts" },
+    { "id": "permission-reask", "title": "A reply of `always` is honored once; the next gated call asks again", "status": "degraded", "evidence": "openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/api-check.log" },
+    { "id": "stream-deltas", "title": "stream_event deltas translate into part delta frames", "status": "unverified", "evidence": "openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/e2e-note.md" },
+    { "id": "transcript-order", "title": "User prompts render before the assistant output they caused", "status": "unverified", "evidence": "bridge/test/golden/want-message-order-inversion.json", "defect": "message-order-inversion" },
+    { "id": "model-identity", "title": "Session events carry Maki's real model name", "status": "unverified", "evidence": "bridge/test/golden/want-synthesized-model-name.json", "defect": "synthesized-model-name" }
+  ],
+  "versions": [
+    { "component": "OpenCode (pinned contract)", "value": "2.0.32", "evidence": "bridge/src/openapi-2.0.32.json" },
+    { "component": "Maki SDK (wire)", "value": "0.6.4", "evidence": "openspec/changes/archive/2026-10-21-add-opencode-tui-bridge/evidence/e2e-note.md" },
+    { "component": "Sandbox transport", "value": "OpenShell sandbox exec (stdio), non-root sandbox user, no secrets via --env; bridge binds 127.0.0.1", "evidence": "bin/maki-oss" }
+  ]
+}

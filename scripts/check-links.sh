@@ -3,7 +3,9 @@
 #
 # Extracts Markdown link targets (inline `](URL)` and reference
 # `[label]: URL` definitions) from every *.md file under the given paths
-# (default: docs) and requests each URL once.
+# (default: docs) and requests each URL once. Relative link targets are
+# checked against the filesystem: each one must resolve, from the linking
+# file's directory, to an existing path (the archive-link rot class).
 #
 # Each URL is checked with `curl -fsSL --head` first. Some servers reject
 # HEAD while serving GET normally (the OpenShell docs MCP endpoint answers
@@ -61,6 +63,19 @@ done < "$file_list"
 
 sort -u "$url_list" > "$work_dir/sorted_urls"
 
+# Relative targets: "<file>|<target>" with fragments and titles stripped,
+# external schemes dropped — checked against the filesystem below.
+rel_list="$work_dir/rel_links"
+: > "$rel_list"
+while IFS= read -r file; do
+    grep -Eo '\]\([^)]+\)' "$file" 2>/dev/null \
+        | sed -e 's/^](//' -e 's/)$//' -e 's/[[:space:]].*$//' \
+        | sed -e 's/#.*$//' \
+        | grep -Ev '^(https?|mailto):' \
+        | grep -v '^$' \
+        | sed -e "s|^|$file:|" >> "$rel_list" || true
+done < "$file_list"
+
 total=0
 failures=0
 while IFS= read -r url; do
@@ -76,5 +91,21 @@ while IFS= read -r url; do
     fi
 done < "$work_dir/sorted_urls"
 
-printf '\nchecked %s link(s); %s failure(s)\n' "$total" "$failures"
+rel_total=0
+while IFS= read -r entry; do
+    rel_file=${entry%%:*}
+    rel_target=${entry#*:}
+    [ -n "$rel_target" ] || continue
+    rel_total=$((rel_total + 1))
+    case $rel_target in
+        /*) rel_resolved=$rel_target ;;
+        *) rel_resolved=$(dirname "$rel_file")/$rel_target ;;
+    esac
+    if [ ! -e "$rel_resolved" ]; then
+        printf 'FAIL %s: relative link %s -> %s\n' "$rel_file" "$rel_target" "$rel_resolved"
+        failures=$((failures + 1))
+    fi
+done < "$rel_list"
+
+printf '\nchecked %s link(s), %s relative link(s); %s failure(s)\n' "$total" "$rel_total" "$failures"
 [ "$failures" -eq 0 ]

@@ -406,5 +406,7 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", () => { for (const s of sessions.values()) s.maki.kill(); });
 
-Bun.serve({ port: PORT, hostname: "127.0.0.1", idleTimeout: 0, fetch: handle });
-console.log(`bridge listening on http://127.0.0.1:${PORT} (canonical: ${CANONICAL})`);
+// server.port (not PORT): with PORT=0 the listen line must name the bound
+// port, which is what wait_for_bridge_port parses
+const server = Bun.serve({ port: PORT, hostname: "127.0.0.1", idleTimeout: 0, fetch: handle });
+console.log(`bridge listening on http://127.0.0.1:${server.port} (canonical: ${CANONICAL})`);

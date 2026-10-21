@@ -1,0 +1,109 @@
+[
+  {
+    "type": "session.execution.started"
+  },
+  {
+    "type": "session.step.started",
+    "agent": "sample",
+    "model": {
+      "providerID": "sample",
+      "id": "sample"
+    }
+  },
+  {
+    "type": "session.reasoning.started",
+    "ordinal": 0
+  },
+  {
+    "type": "session.reasoning.delta",
+    "ordinal": 0,
+    "delta": "The user wants me to run a shell command and report the output."
+  },
+  {
+    "type": "session.reasoning.ended",
+    "ordinal": 0,
+    "text": "The user wants me to run a shell command and report the output."
+  },
+  {
+    "type": "session.tool.input.started",
+    "name": "bash"
+  },
+  {
+    "type": "session.tool.input.ended",
+    "text": "{\"command\":\"echo precheck-ok\",\"description\":\"Run precheck command\"}"
+  },
+  {
+    "type": "session.tool.called",
+    "input": {
+      "command": "echo precheck-ok",
+      "description": "Run precheck command"
+    }
+  },
+  {
+    "type": "session.tool.success",
+    "content": [
+      {
+        "type": "text",
+        "text": "precheck-ok"
+      }
+    ]
+  },
+  {
+    "type": "session.reasoning.started",
+    "ordinal": 1
+  },
+  {
+    "type": "session.reasoning.delta",
+    "ordinal": 1,
+    "delta": "Output: precheck-ok"
+  },
+  {
+    "type": "session.reasoning.ended",
+    "ordinal": 1,
+    "text": "Output: precheck-ok"
+  },
+  {
+    "type": "session.reasoning.started",
+    "ordinal": 2
+  },
+  {
+    "type": "session.reasoning.delta",
+    "ordinal": 2,
+    "delta": "The user asked me to run the command `echo precheck-ok` and report the output. The command executed successfully and returned `precheck-ok`. They're asking me to report this output to them.\n\nI should provide a clear, concise response showing what the output was."
+  },
+  {
+    "type": "session.reasoning.ended",
+    "ordinal": 2,
+    "text": "The user asked me to run the command `echo precheck-ok` and report the output. The command executed successfully and returned `precheck-ok`. They're asking me to report this output to them.\n\nI should provide a clear, concise response showing what the output was."
+  },
+  {
+    "type": "session.text.started",
+    "ordinal": 0
+  },
+  {
+    "type": "session.text.delta",
+    "ordinal": 0,
+    "delta": "The command executed with output:\n\n```\nprecheck-ok\n```"
+  },
+  {
+    "type": "session.text.ended",
+    "ordinal": 0,
+    "text": "The command executed with output:\n\n```\nprecheck-ok\n```"
+  },
+  {
+    "type": "session.step.ended",
+    "finish": "stop",
+    "tokens": {
+      "input": 8323,
+      "output": 113,
+      "reasoning": 0,
+      "cache": {
+        "read": 16448,
+        "write": 0
+      }
+    }
+  },
+  {
+    "type": "session.execution.succeeded"
+  }
+]

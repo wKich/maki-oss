@@ -1,0 +1,91 @@
+// Cross-check test (design decision 5): tests, statuses, and the inventory
+// are cross-checked, not auto-synced. Flipping a status or closing a defect
+// stays a human edit, but it must stay consistent: verified statuses name an
+// existing test or fixture, every evidence key resolves, inventory entries
+// name an existing capture, and expected-failure markers pair with open
+// entries in both directions.
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { expect, test } from "bun:test";
+
+const ROOT = new URL("../..", import.meta.url); // repository root (from bridge/test/)
+const path = (rel: string) => fileURLToPath(new URL(rel, ROOT));
+
+interface Defect {
+  id: string;
+  status: string;
+  capture: string;
+  golden?: { fixture: string; want: string };
+  expectedFailure?: boolean;
+}
+interface Row {
+  evidence: string;
+  status?: string;
+  [key: string]: unknown;
+}
+interface Statuses {
+  routes: Row[];
+  features: Row[];
+  versions: Row[];
+}
+
+const defects: Defect[] = JSON.parse(readFileSync(path("bridge/defects.json"), "utf8"));
+const statuses: Statuses = JSON.parse(readFileSync(path("bridge/compat/statuses.json"), "utf8"));
+const rows = [...statuses.routes, ...statuses.features, ...statuses.versions];
+
+const isTestOrFixture = (evidence: string) =>
+  evidence.includes(".test.") ||
+  evidence.startsWith("bridge/test/") ||
+  evidence.startsWith("tests/");
+
+test("every evidence key on every row points at an existing file", () => {
+  const missing = rows.filter((r) => !existsSync(path(r.evidence))).map((r) => r.evidence);
+  expect(missing).toEqual([]);
+});
+
+test("every verified feature names an existing test or fixture", () => {
+  const bad = statuses.features
+    .filter((f) => f.status === "verified")
+    .filter((f) => !isTestOrFixture(f.evidence))
+    .map((f) => `${f.evidence} (feature ${f.id})`);
+  expect(bad).toEqual([]);
+});
+
+test("every inventory entry names an existing capture", () => {
+  const missing = defects.filter((d) => !existsSync(path(d.capture))).map((d) => d.id);
+  expect(missing).toEqual([]);
+});
+
+test("expected-failure markers pair with open inventory entries, both ways", () => {
+  const problems: string[] = [];
+  for (const d of defects) {
+    const open = d.status === "known";
+    if (d.expectedFailure && !open) problems.push(`${d.id}: marker present but status is ${d.status}`);
+    if (d.expectedFailure && !d.golden) problems.push(`${d.id}: marker present but no golden`);
+    if (d.expectedFailure && d.golden && !existsSync(path(`bridge/test/${d.golden.want}`))) {
+      problems.push(`${d.id}: desired golden missing: ${d.golden.want}`);
+    }
+    if (open && d.golden && !d.expectedFailure) {
+      problems.push(`${d.id}: open with a desired golden but no expected-failure marker`);
+    }
+  }
+  expect(problems).toEqual([]);
+});
+
+test("every desired golden is claimed by exactly one inventory entry", () => {
+  const dir = fileURLToPath(new URL("./golden", import.meta.url));
+  const onDisk = existsSync(dir)
+    ? readdirSync(dir)
+        .filter((f) => f.startsWith("want-"))
+        .map((f) => `golden/${f}`)
+    : [];
+  const claimed = defects.filter((d) => d.golden).map((d) => d.golden!.want);
+  expect(onDisk.slice().sort()).toEqual(claimed.slice().sort());
+});
+
+test("open inventory entries and their features are linked", () => {
+  for (const f of statuses.features.filter((x) => x.defect)) {
+    const entry = defects.find((d) => d.id === f.defect);
+    expect(entry, `unknown inventory entry ${f.defect}`).toBeDefined();
+  }
+});

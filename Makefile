@@ -7,10 +7,48 @@
 
 SHELL := /bin/sh
 
-.PHONY: test lint lint-profiles install-fish
+.PHONY: test test-bridge test-ui compat compat-drift lint lint-profiles install-fish
 
 test:
 	tests/run-tests.sh
+
+# Offline bridge suite: goldens, contract/wire rules, session API over a
+# spawned bridge. No Docker, gateway, or network. Skips with a message when
+# bun is absent; never part of `make test`.
+test-bridge:
+	@if command -v bun >/dev/null 2>&1; then \
+		cd bridge && bun test; \
+	else \
+		echo 'bun not found; skipping bridge test suite'; \
+	fi
+
+# TUI-level discovery pass against the real opencode binary: boot, prompt, and
+# permission invariants with a transcript capture compared against the defect
+# inventory (open defects record their reproduction instead of failing).
+# Skips with a message when opencode or bun are absent; never part of `make test`.
+test-ui:
+	@if command -v opencode >/dev/null 2>&1 && command -v bun >/dev/null 2>&1; then \
+		bridge/test/tui-discovery.sh; \
+	else \
+		echo 'opencode or bun not found; skipping TUI discovery pass'; \
+	fi
+
+# Regenerate docs/compatibility.md from statuses.json + defects.json and fail
+# when the regenerated report differs from the committed one, so a status
+# edit cannot land without its report (and vice versa).
+compat:
+	bun scripts/gen-compat.ts
+	git diff --exit-code docs/compatibility.md
+
+# Contract drift gate: re-capture the installed OpenCode contract and report
+# route/schema deltas against the vendored copy. Skips with a message when a
+# required binary is absent; never part of `make test`.
+compat-drift:
+	@if command -v bun >/dev/null 2>&1; then \
+		bun scripts/compat-drift.ts; \
+	else \
+		echo 'bun not found; skipping contract drift gate'; \
+	fi
 
 lint:
 	shellcheck bin/maki-oss tests/run-tests.sh tests/stub/openshell tests/stub/docker tests/stub/bun tests/stub/opencode
